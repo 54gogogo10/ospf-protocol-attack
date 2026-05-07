@@ -1,101 +1,101 @@
-# OSPF Protocol Attack Simulator — Design Document
+# OSPF 协议攻击模拟器 — 设计文档
 
-**Date:** 2026-05-08
-**Status:** Draft
+**日期:** 2026-05-08
+**状态:** 草案
 
-## 1. Overview
+## 1. 概述
 
-A Python-based OSPF protocol attack simulation and testing tool, packaged as a single Windows `.exe` via PyInstaller for Win7+ zero-dependency deployment. Supports passive (out-of-band, no neighbor adjacency) and active (in-band, neighbor-established) attack modes against both virtual and physical OSPF routers.
+基于 Python 的 OSPF 协议攻击模拟与测试工具，通过 PyInstaller 打包为单个 Windows `.exe` 文件，支持 Win7+ 零依赖部署。支持旁路模式（不建立邻居关系，被动嗅探+注入）和主动模式（建立邻居关系后攻击），可对虚拟和物理 OSPF 路由器发起测试。
 
-### Use Cases
-- Educational/lab environments: isolated virtual networks (GNS3/EVE-NG/Docker)
-- Controlled penetration testing against physical routers
-- Security research and new attack technique development
+### 使用场景
+- 教育/实验环境：隔离虚拟网络（GNS3/EVE-NG/Docker）
+- 受控渗透测试：对物理路由器进行安全评估
+- 安全研究：新攻击技术开发
 
-### Interaction Model
-- Core Python library (importable SDK)
-- CLI tool (Click-based) as the primary entry point
-
----
-
-## 2. Technology Stack
-
-| Layer | Choice | Rationale |
-|-------|--------|-----------|
-| Language | Python 3.10+ | Protocol libraries mature, rapid development |
-| Protocol engine | Scapy (`scapy.contrib.ospf`) | Native OSPF packet construction/parsing |
-| High-perf sending | Raw socket fallback | Low-level injection for flood attacks |
-| Packet capture | pcap-ct (provides `import pcap`) + Npcap | Promiscuous-mode sniffing on Windows |
-| CLI | Click | Lightweight, composable subcommands |
-| Packaging | PyInstaller `--onefile` | Single ~45MB `.exe`, no Python install needed |
-| Npcap bundling | `--add-binary` embedded + auto-detect at startup | Zero-config network capture |
-| Testing | pytest + Docker FRRouting topologies | Unit + integration verification |
-| Config format | YAML | Human-readable attack scenario files |
+### 交互方式
+- 核心 Python 库（可导入的 SDK）
+- CLI 命令行工具（基于 Click）作为主要操作入口
 
 ---
 
-## 3. Architecture
+## 2. 技术栈
 
-### Directory Structure
+| 层级 | 选型 | 理由 |
+|------|------|------|
+| 语言 | Python 3.10+ | 协议库成熟，开发效率高 |
+| 协议引擎 | Scapy（`scapy.contrib.ospf`） | 原生 OSPF 报文构造/解析 |
+| 高性能发包 | Raw Socket 降级方案 | 泛洪攻击时的低层注入 |
+| 报文捕获 | pcap-ct（提供 `import pcap`）+ Npcap | Windows 平台混杂模式嗅探 |
+| CLI | Click | 轻量级，子命令可组合 |
+| 打包 | PyInstaller `--onefile` | 单文件 ~45MB `.exe`，无需安装 Python |
+| Npcap 捆绑 | `--add-binary` 嵌入 + 启动时自动检测 | 零配置网络抓包 |
+| 测试 | pytest + Docker FRRouting 拓扑 | 单元测试 + 集成验证 |
+| 配置格式 | YAML | 人类可读的攻击场景文件 |
+
+---
+
+## 3. 架构
+
+### 目录结构
 
 ```
 OSPF_Protocol_Attack/
 ├── ospf_attack/
 │   ├── __init__.py
-│   ├── core/
+│   ├── core/                         # 核心引擎
 │   │   ├── __init__.py
-│   │   ├── packet.py          # OSPF packet construction/parsing (Scapy wrapper)
-│   │   ├── neighbor.py        # Neighbor state machine (Down→Init→2-Way→Full)
-│   │   ├── lsa_db.py          # Link-state database simulation
-│   │   ├── router.py          # Virtual router identity (ID, area, auth)
-│   │   ├── sniffer.py         # Passive sniffing engine
-│   │   └── event.py           # Event bus for decoupled communication
-│   ├── attacks/
+│   │   ├── packet.py                 # OSPF 报文构造/解析（Scapy 封装）
+│   │   ├── neighbor.py               # 邻居状态机（Down→Init→2-Way→Full）
+│   │   ├── lsa_db.py                 # 链路状态数据库模拟
+│   │   ├── router.py                 # 虚拟路由器身份（ID、区域、认证）
+│   │   ├── sniffer.py                # 被动嗅探引擎
+│   │   └── event.py                  # 事件总线，解耦通信
+│   ├── attacks/                      # 攻击插件
 │   │   ├── __init__.py
-│   │   ├── base.py            # AttackBase abstract class + AttackResult
-│   │   ├── adjacency/
-│   │   │   ├── hello_inject.py
-│   │   │   ├── adjacency_break.py
-│   │   │   └── dr_bdr_hijack.py
-│   │   ├── lsa/
-│   │   │   ├── route_inject.py
-│   │   │   ├── max_seq.py
-│   │   │   ├── max_age.py
-│   │   │   └── fight_back.py
-│   │   ├── dos/
-│   │   │   ├── flood.py
-│   │   │   ├── spf_recalc.py
-│   │   │   └── db_overflow.py
-│   │   └── protocol/
-│   │       ├── mitm.py
-│   │       └── replay.py
-│   ├── network/
-│   │   ├── sender.py          # Packet sender (Scapy + raw socket fallback)
-│   │   └── adapter.py         # Interface abstraction (pcap/Ethernet per env)
-│   ├── config/
-│   │   ├── config.py          # Config loader (YAML + CLI merge, 3-tier priority)
-│   │   └── types.py           # Dataclass config types per attack category
-│   ├── npcap/
-│   │   ├── detector.py        # Npcap presence detection at startup
-│   │   └── installer.py       # Embedded installer extraction + silent install
-│   ├── cli/
+│   │   ├── base.py                   # AttackBase 抽象基类 + AttackResult
+│   │   ├── adjacency/                # 邻接关系攻击
+│   │   │   ├── hello_inject.py       # 恶意 Hello 注入
+│   │   │   ├── adjacency_break.py    # 邻接关系破坏
+│   │   │   └── dr_bdr_hijack.py      # DR/BDR 选举操纵
+│   │   ├── lsa/                      # LSA 攻击
+│   │   │   ├── route_inject.py       # 路由注入/毒化
+│   │   │   ├── max_seq.py            # 最大序列号攻击
+│   │   │   ├── max_age.py            # Max-Age 攻击
+│   │   │   └── fight_back.py         # Fight-back 反击
+│   │   ├── dos/                      # 拒绝服务攻击
+│   │   │   ├── flood.py              # Hello/LSA 泛洪
+│   │   │   ├── spf_recalc.py         # SPF 重计算攻击
+│   │   │   └── db_overflow.py        # 数据库溢出
+│   │   └── protocol/                 # 协议级操控攻击
+│   │       ├── mitm.py               # 中间人攻击
+│   │       └── replay.py             # 重放攻击
+│   ├── network/                      # 网络抽象层
+│   │   ├── sender.py                 # 发包器（Scapy + Raw Socket 降级）
+│   │   └── adapter.py                # 接口抽象（pcap/Ethernet 按环境适配）
+│   ├── config/                       # 配置体系
+│   │   ├── config.py                 # 配置加载器（YAML + CLI 合并，三层优先级）
+│   │   └── types.py                  # 各攻击类别的 dataclass 配置类型
+│   ├── npcap/                        # Npcap 依赖管理
+│   │   ├── detector.py               # 启动时检测 Npcap 是否存在
+│   │   └── installer.py              # 内嵌安装程序提取 + 静默安装
+│   ├── cli/                          # CLI 层
 │   │   ├── __init__.py
-│   │   ├── main.py            # Click entry point
-│   │   ├── commands.py        # Subcommand registration per attack
-│   │   └── formatters.py      # Output formatting (table, json, summary)
-│   └── utils/
-│       ├── validators.py      # IP/route/parameter validation
-│       └── logging.py         # Structured logging with audit trail
+│   │   ├── main.py                   # Click 入口
+│   │   ├── commands.py               # 每个攻击类型的子命令注册
+│   │   └── formatters.py             # 输出格式化（表格、JSON、摘要）
+│   └── utils/                        # 工具函数
+│       ├── validators.py             # IP/路由/参数校验
+│       └── logging.py                # 结构化日志与审计追踪
 ├── tests/
-│   ├── unit/                  # Per-module unit tests
+│   ├── unit/                         # 单元测试（每个模块独立）
 │   │   ├── test_packet.py
 │   │   ├── test_neighbor.py
 │   │   ├── test_hello_inject.py
 │   │   └── ...
-│   └── integration/           # Docker-based topology tests
-│       ├── conftest.py        # FRR container fixtures
+│   └── integration/                  # Docker 集成测试
+│       ├── conftest.py               # FRR 容器 fixtures
 │       └── test_topology_attacks.py
-├── docker/
+├── docker/                           # 集成测试拓扑
 │   ├── topo1-single-area/
 │   │   ├── docker-compose.yml
 │   │   └── frr/
@@ -103,23 +103,23 @@ OSPF_Protocol_Attack/
 │   │       └── r2/
 │   └── topo2-multi-area/
 ├── assets/
-│   └── npcap-installer.exe    # Embedded Npcap installer binary
+│   └── npcap-installer.exe           # 内嵌 Npcap 安装程序
 ├── pyproject.toml
 ├── README.md
-└── build.ps1                   # PyInstaller build script
+└── build.ps1                         # PyInstaller 构建脚本
 ```
 
-### Core Design Principles
+### 核心设计原则
 
-1. **Plugin architecture** — Each attack is an independent module implementing `AttackBase`
-2. **Dual attack modes** — PASSIVE (out-of-band, no neighbor) / ACTIVE (in-band, with adjacency)
-3. **Event bus** — Decouples attack logic from network transport
-4. **3-tier config** — Defaults → YAML file → CLI flags (later overrides earlier)
-5. **Self-contained deployment** — Single `.exe` with embedded Npcap; auto-detect + prompt-install at startup
+1. **插件式架构** — 每个攻击类型为独立模块，实现 `AttackBase` 接口
+2. **双模式攻击** — PASSIVE（旁路，不建邻居）/ ACTIVE（主动，建邻居后攻击）
+3. **事件总线** — 攻击逻辑与网络传输层解耦
+4. **三层配置优先级** — 默认值 → YAML 配置文件 → CLI 参数，后者覆盖前者
+5. **自包含部署** — 单 `.exe` 内嵌 Npcap，启动时自动检测 + 提示安装
 
 ---
 
-## 4. AttackBase Interface
+## 4. AttackBase 接口
 
 ```python
 from abc import ABC, abstractmethod
@@ -127,22 +127,23 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 class AttackMode(Enum):
-    PASSIVE = "passive"
-    ACTIVE  = "active"
+    PASSIVE = "passive"       # 旁路：不建邻居，嗅探 + 注入
+    ACTIVE  = "active"        # 主动：先建邻居，借助邻居关系攻击
 
 class AttackCategory(Enum):
-    ADJACENCY = "adjacency"
-    LSA       = "lsa"
-    DOS       = "dos"
-    PROTOCOL  = "protocol"
+    ADJACENCY = "adjacency"   # 邻接关系
+    LSA       = "lsa"         # 链路状态通告
+    DOS       = "dos"         # 拒绝服务
+    PROTOCOL  = "protocol"    # 协议级操控
 
 @dataclass
 class AttackResult:
-    success: bool
-    packets_sent: int
-    target_affected: bool
-    details: str
-    evidence: dict = field(default_factory=dict)
+    """攻击执行结果"""
+    success: bool              # 攻击是否成功执行
+    packets_sent: int          # 发送的报文数
+    target_affected: bool      # 目标是否受影响（由 verify 判定）
+    details: str               # 详细信息
+    evidence: dict = field(default_factory=dict)  # 验证证据（如抓包摘要）
 
 class BaseAttack(ABC):
     name: str = ""
@@ -157,22 +158,22 @@ class BaseAttack(ABC):
 
     @abstractmethod
     def setup(self) -> None:
-        """Phase 1: initialize — sniff topology or establish adjacency."""
+        """阶段一：初始化——嗅探拓扑或建立邻接关系"""
 
     @abstractmethod
     def launch(self) -> AttackResult:
-        """Phase 2: execute the attack."""
+        """阶段二：执行攻击"""
 
     @abstractmethod
     def verify(self) -> bool:
-        """Phase 3: confirm attack effect via observed state change."""
+        """阶段三：通过观察状态变化确认攻击效果"""
 
     @abstractmethod
     def teardown(self) -> None:
-        """Phase 4: cleanup resources (close sockets, reset state)."""
+        """阶段四：清理资源（关闭 socket、重置状态）"""
 
     def run(self) -> AttackResult:
-        """Template method orchestrating all four phases."""
+        """模板方法，统一编排四个阶段"""
         try:
             self.setup()
             result = self.launch()
@@ -184,224 +185,250 @@ class BaseAttack(ABC):
 
 ---
 
-## 5. Attack Module Catalog
+## 5. 攻击模块清单
 
-### 5.1 Adjacency Attacks (Category: ADJACENCY)
+### 5.1 邻接关系攻击（ADJACENCY）
 
-| # | Module | Default Mode | Technique | Verification |
-|---|--------|-------------|-----------|-------------|
-| 1 | `hello-inject` | passive | Sniff legitimate Hello packets, then inject forged Hello with matching parameters to establish unauthorized adjacency | Target neighbor table shows new entry with attacker's Router ID |
-| 2 | `adjacency-break` | passive | Inject malformed Hello (wrong Area ID, auth mismatch, 1-Way state) to tear down existing adjacency | Target neighbor state transitions from Full to Down |
-| 3 | `dr-bdr-hijack` | passive | Inject Hello with Priority=255 to win DR election | Target's DR/BDR role changes; LSA flooding path redirected |
+| # | 模块 | 默认模式 | 攻击手法 | 验证指标 |
+|---|------|---------|---------|---------|
+| 1 | `hello-inject` | 旁路 | 嗅探合法 Hello 报文，注入伪造 Hello 建立未授权邻接关系 | 目标邻居表出现攻击者的 Router ID 条目 |
+| 2 | `adjacency-break` | 旁路 | 注入畸形 Hello（错误 Area ID、认证不匹配、1-Way 状态），破坏合法邻居关系 | 目标邻居状态从 Full 变为 Down |
+| 3 | `dr-bdr-hijack` | 旁路 | 注入 Priority=255 的 Hello 报文，抢占 DR 角色 | 目标的 DR/BDR 角色变化，LSA 泛洪路径被重定向 |
 
-### 5.2 LSA Attacks (Category: LSA)
+### 5.2 LSA 攻击（LSA）
 
-| # | Module | Default Mode | Technique | Verification |
-|---|--------|-------------|-----------|-------------|
-| 4 | `route-inject` | passive | Sniff legitimate LSU, construct poisoned LSA (Type-5 for external routes, or Type-3 for inter-area), advertise via LSU | Target routing table contains poisoned route |
-| 5 | `max-seq` | passive | Inject LSU with Sequence=0x7FFFFFFF; legitimate LSA ignored due to lower sequence | Target LSDB shows attacker's LSA as the canonical version |
-| 6 | `max-age` | passive | Inject LSU with Age=3600 (MaxAge); target removes the LSA from LSDB | Target LSDB entry deleted; routing table loses the corresponding route |
-| 7 | `fight-back` | passive | Continuously sniff for legitimate LSAs and immediately inject a higher-sequence counter-LSA | Legitimate LSA cannot propagate; attacker's version persists |
+| # | 模块 | 默认模式 | 攻击手法 | 验证指标 |
+|---|------|---------|---------|---------|
+| 4 | `route-inject` | 旁路 | 嗅探合法 LSU，构造毒化 LSA（Type-5 外部路由或 Type-3 区域间路由），通过 LSU 注入 | 目标路由表出现毒化路由条目 |
+| 5 | `max-seq` | 旁路 | 注入 Sequence=0x7FFFFFFF 的 LSU，合法 LSA 因序列号更低被忽略 | 目标 LSDB 中攻击者 LSA 成为权威版本 |
+| 6 | `max-age` | 旁路 | 注入 Age=3600（MaxAge）的 LSU，迫使目标清除该 LSA | 目标 LSDB 对应条目被删除；路由表丢失对应路由 |
+| 7 | `fight-back` | 旁路 | 持续嗅探合法 LSA，即时注入更高序列号的对抗 LSA | 合法 LSA 无法传播，攻击者版本持续存在 |
 
-### 5.3 Denial of Service Attacks (Category: DOS)
+### 5.3 拒绝服务攻击（DOS）
 
-| # | Module | Default Mode | Technique | Verification |
-|---|--------|-------------|-----------|-------------|
-| 8 | `flood` | passive | High-rate Hello/LSU injection to exhaust router CPU | Target CPU utilization sustained >80% |
-| 9 | `spf-recalc` | passive | Continuously inject changing LSAs to force repeated SPF recomputation | SPF execution interval drops below configurable threshold (default 1s) |
-| 10 | `db-overflow` | passive | Inject large number of external LSAs (Type-5) to fill the LSDB | Target LSDB entry count exceeds configured max; router may drop into overload state |
+| # | 模块 | 默认模式 | 攻击手法 | 验证指标 |
+|---|------|---------|---------|---------|
+| 8 | `flood` | 旁路 | 高频发送 Hello/LSU 报文，耗尽路由器 CPU 资源 | 目标 CPU 使用率持续 >80% |
+| 9 | `spf-recalc` | 旁路 | 持续注入变化的 LSA，迫使路由器反复执行 SPF 算法 | SPF 执行间隔低于可配置阈值（默认 1 秒） |
+| 10 | `db-overflow` | 旁路 | 注入大量外部 LSA（Type-5），填满链路状态数据库 | 目标 LSDB 条目数超过配置上限，路由器可能进入过载状态 |
 
-### 5.4 Protocol-Level Manipulation Attacks (Category: PROTOCOL)
+### 5.4 协议级操控攻击（PROTOCOL）
 
-| # | Module | Default Mode | Technique | Verification |
-|---|--------|-------------|-----------|-------------|
-| 11 | `mitm` | passive | Hub-environment: promiscuous sniff → modify OSPF fields in-transit → forward altered packet | Target routing table reflects modified LSA content |
-| 12 | `replay` | passive | Capture OSPF packets → replay later (optionally with field modification) to cause routing instability | Target routing table oscillates; LSDB shows sequence number rollback |
+| # | 模块 | 默认模式 | 攻击手法 | 验证指标 |
+|---|------|---------|---------|---------|
+| 11 | `mitm` | 旁路 | 集线器环境：混杂模式嗅探 → 篡改 OSPF 字段 → 转发被篡改报文 | 目标路由表反映被篡改 LSA 的内容 |
+| 12 | `replay` | 旁路 | 捕获合法 OSPF 报文 → 延后重放（可选修改字段）引发路由震荡 | 目标路由表震荡，LSDB 出现序列号回退 |
 
 ---
 
-## 6. Configuration System
+## 6. 配置体系
 
-### 6.1 Base Configuration
+### 6.1 基础配置
 
 ```python
 @dataclass
 class AttackConfig:
-    """Shared configuration for all attack types."""
-    iface: str                          # Network interface
-    target: str                         # Target IP or subnet
-    mode: AttackMode = AttackMode.PASSIVE
-    router_id: str = "1.1.1.1"         # Spoofed Router ID
-    area_id: str = "0.0.0.0"           # OSPF Area
+    """所有攻击类型共享的基础配置"""
+    iface: str                              # 网卡接口
+    target: str                             # 目标 IP 或网段
+    mode: AttackMode = AttackMode.PASSIVE   # 攻击模式
+    router_id: str = "1.1.1.1"             # 伪装的路由器 ID
+    area_id: str = "0.0.0.0"               # OSPF 区域
 
-    # Sniffing parameters
-    sniff_duration: int = 30            # Sniff duration in seconds
+    # 嗅探参数
+    sniff_duration: int = 30                # 嗅探持续时间（秒）
 
-    # Sending parameters
-    packet_rate: int = 10               # Packets per second
-    max_packets: int = 0                # 0 = unlimited
+    # 发包参数
+    packet_rate: int = 10                   # 每秒发包数（pps）
+    max_packets: int = 0                    # 最大发包数，0=不限
 
-    # Output
+    # 输出参数
     verbose: bool = False
-    pcap_output: str = ""               # Output pcap file path
+    pcap_output: str = ""                   # 输出 pcap 文件路径
 ```
 
-### 6.2 Per-Category Configurations
+### 6.2 各攻击类别专用配置
 
 ```python
 @dataclass
 class HelloInjectionConfig(AttackConfig):
-    hello_interval: int = 10
-    router_dead_interval: int = 40
-    router_priority: int = 255
-    auth_type: str = "none"             # none, plain, md5
+    """恶意 Hello 注入 / 邻接破坏 / DR 操纵 专用配置"""
+    hello_interval: int = 10                # Hello 发送间隔
+    router_dead_interval: int = 40          # Dead 间隔
+    router_priority: int = 255              # 路由器优先级
+    auth_type: str = "none"                 # 认证类型：none / plain / md5
     auth_key: str = ""
     subnet_mask: str = "255.255.255.0"
 
 @dataclass
 class LSAConfig(AttackConfig):
-    lsa_type: int = 5                   # 1=Router, 3=Summary, 5=External
+    """LSA 攻击专用配置"""
+    lsa_type: int = 5                       # LSA 类型：1=Router, 3=Summary, 5=External
     link_state_id: str = ""
     advertising_router: str = ""
-    sequence_number: int = 0x80000001
-    age: int = 0
+    sequence_number: int = 0x80000001       # 序列号
+    age: int = 0                            # LSA Age，Max-Age 攻击设为 3600
     metric: int = 1
     network_mask: str = "255.255.255.0"
     forwarding_address: str = "0.0.0.0"
-    external_routes: list = field(default_factory=list)
+    external_routes: list = field(default_factory=list)  # Type-5 注入的外部路由列表
 
 @dataclass
 class DoSConfig(AttackConfig):
-    duration: int = 60
-    thread_count: int = 1
-    lsa_change_interval: int = 2
-    lsa_count: int = 1000
+    """拒绝服务攻击专用配置"""
+    duration: int = 60                      # 攻击持续时间（秒）
+    thread_count: int = 1                   # 并发发包线程数
+    lsa_change_interval: int = 2            # SPF 重计算：LSA 变化间隔（秒）
+    lsa_count: int = 1000                   # DB 溢出：注入 LSA 数量
 
 @dataclass
 class MITMConfig(AttackConfig):
-    target_a: str = ""
-    target_b: str = ""
-    action: str = "modify"              # drop, modify, forward, inject
-    modify_rules: list = field(default_factory=list)
+    """中间人攻击专用配置"""
+    target_a: str = ""                      # 路由器 A IP
+    target_b: str = ""                      # 路由器 B IP
+    action: str = "modify"                  # 操作类型：drop / modify / forward / inject
+    modify_rules: list = field(default_factory=list)  # 修改规则列表
 
 @dataclass
 class ReplayConfig(AttackConfig):
-    capture_file: str = ""
-    replay_loop: bool = False
-    replay_interval: int = 5
-    modify_fields: dict = field(default_factory=dict)
+    """重放攻击专用配置"""
+    capture_file: str = ""                  # 捕获的 pcap 文件路径
+    replay_loop: bool = False               # 是否循环重放
+    replay_interval: int = 5                # 重放间隔（秒）
+    modify_fields: dict = field(default_factory=dict)  # 重放时修改的字段
 ```
 
-### 6.3 Configuration Priority
+### 6.3 配置优先级
 
-Defaults → YAML file → CLI flags (later overrides earlier)
+默认值 → YAML 配置文件 → CLI 参数（后者覆盖前者）
 
-### 6.4 CLI Examples
+### 6.4 CLI 使用示例
 
 ```bash
-# Passive Hello injection
+# 旁路 Hello 注入
 ospf-attack hello-inject --iface eth0 --target 192.168.1.0/24 \
     --passive --priority 255 --sniff-duration 30
 
-# Max-Age attack
+# Max-Age 攻击清除 LSA
 ospf-attack max-age --iface eth0 --target 224.0.0.5 \
     --passive --age 3600 --lsa-type 1
 
-# Flood DoS
+# DoS 泛洪
 ospf-attack flood --iface eth0 --target 224.0.0.5 \
     --duration 60 --packet-rate 500 --thread-count 4
 
-# From YAML config
+# 从 YAML 配置文件加载
 ospf-attack mitm --config ./mitm_attack.yaml
 ```
 
+### 6.5 YAML 配置文件示例
+
+```yaml
+# mitm_attack.yaml
+attack: mitm
+iface: eth1
+target_a: 10.0.0.1
+target_b: 10.0.0.2
+mode: passive
+sniff_duration: 60
+action: modify
+modify_rules:
+  - field: lsa.age
+    set: 3600
+  - field: lsa.metric
+    add: 100
+verbose: true
+pcap_output: ./attack_capture.pcap
+```
+
 ---
 
-## 7. Npcap Dependency Management
+## 7. Npcap 依赖管理
 
-### Startup Flow
+### 启动流程
 
 ```
-Program starts
-    |
-    ├─ Check Npcap: read registry HKLM\SOFTWARE\WOW6432Node\Npcap
-    │   or try pcap.findalldevs()
+程序启动
     │
-    ├─ Present → sniffing enabled
+    ├─ 检测 Npcap 是否已安装
+    │   ├─ 读取注册表 HKLM\SOFTWARE\WOW6432Node\Npcap
+    │   └─ 或尝试 pcap.findalldevs()
     │
-    └─ Absent → prompt:
-        "Npcap not found. Sniffing unavailable without it.
-         Install Npcap? (Y/n)"
-        ├─ Y → extract embedded installer to %TEMP%
-        │       run: npcap-installer.exe /S
-        │       re-check → sniffing enabled
-        └─ N → sniffing degraded, injection attacks fully functional
+    ├─ 已安装 → 嗅探功能正常启用
+    │
+    └─ 未安装 → 控制台提示
+        "检测到系统中未安装 Npcap，缺少 Npcap 将无法使用嗅探功能。
+         是否安装 Npcap？(Y/n)"
+        ├─ Y → 从内嵌资源提取 npcap-installer.exe 到 %TEMP%
+        │       静默安装：npcap-installer.exe /S
+        │       安装后重新检测 → 嗅探功能启用
+        └─ N → 嗅探功能降级，发包攻击全部可用
 ```
 
-- Pure injection attacks (all 12 modules in passive mode) work without Npcap
-- Only passive sniffing for topology discovery requires Npcap
+- 所有 12 类攻击模块的纯发包模式不依赖 Npcap
+- 仅被动嗅探拓扑发现功能需要 Npcap
 
 ---
 
-## 8. Data Flow (Passive Mode)
+## 8. 数据流（旁路模式）
 
 ```
-[OSPF Network] ── promisc sniff ──→ Sniffer (pcap-ct)
-                                        │
-                                        ▼
-                                   Packet Parser (Scapy)
-                                        │
-                                        ▼
-                                   Topology Model
-                                   ├─ router_ids[]
-                                   ├─ area_ids[]
-                                   ├─ dr_bdr_map{}
-                                   └─ lsa_summary[]
-                                        │
-                                        ▼
-                              Attack.setup() ── builds attack plan
-                                        │
-                                        ▼
-                              Attack.launch() ── constructs malicious packets
-                                        │
-                                        ▼
-                              Sender ── sends via Scapy/RawSocket
-                                        │
-                                        ▼
-                              Attack.verify() ── re-sniffs, compares state
+[OSPF 网络] ── 混杂嗅探 ──→ Sniffer (pcap-ct)
+                                  │
+                                  ▼
+                            报文解析器 (Scapy)
+                                  │
+                                  ▼
+                            拓扑模型
+                            ├─ router_ids[]       路由器 ID 列表
+                            ├─ area_ids[]         区域 ID 列表
+                            ├─ dr_bdr_map{}       DR/BDR 映射
+                            └─ lsa_summary[]      LSA 摘要
+                                  │
+                                  ▼
+                       Attack.setup() ── 构建攻击计划
+                                  │
+                                  ▼
+                       Attack.launch() ── 构造恶意报文
+                                  │
+                                  ▼
+                       Sender ── 通过 Scapy/RawSocket 发送
+                                  │
+                                  ▼
+                       Attack.verify() ── 重新嗅探，对比状态
 ```
 
 ---
 
-## 9. Testing Strategy
+## 9. 测试策略
 
-### Unit Tests (pytest)
-- Each attack module tested in isolation with mocked network
-- Verify packet construction correctness (field values, checksums)
-- Verify state machine transitions
-- Verify config resolution (defaults → YAML → CLI)
+### 单元测试（pytest）
+- 每个攻击模块独立测试，使用 mock 模拟网络层
+- 验证报文构造正确性（字段值、校验和）
+- 验证状态机转换正确性
+- 验证配置解析优先级（默认值 → YAML → CLI）
 
-### Integration Tests (Docker + FRRouting)
-- Topology: 3-router single-area OSPF network
-- Each attack executed against running FRR container
-- Verify: neighbor state change, LSDB content, routing table modification
-- Multi-area topology for inter-area attack verification
+### 集成测试（Docker + FRRouting）
+- 拓扑：3 路由器单区域 OSPF 网络
+- 每种攻击对运行中的 FRR 容器执行
+- 验证：邻居状态变化、LSDB 内容、路由表变更
+- 多区域拓扑用于跨区域攻击验证
 
-### Docker Topology
+### Docker 集成测试拓扑
 
 ```
 docker-compose.yml
 ├── r1 (FRR, 10.0.0.1, Area 0.0.0.0)
 ├── r2 (FRR, 10.0.0.2, Area 0.0.0.0)
-│   └── r2 connects to subnet 192.168.1.0/24
+│   └── r2 连接子网 192.168.1.0/24
 ├── r3 (FRR, 10.0.0.3, Area 0.0.0.1)
-└── attacker (ospf-attack container)
-    └── bridge to same LAN segment
+└── attacker (ospf-attack 容器)
+    └── 桥接到同一 LAN 段
 ```
 
 ---
 
-## 10. PyInstaller Build
+## 10. PyInstaller 构建
 
 ```powershell
 # build.ps1
@@ -416,14 +443,14 @@ pyinstaller `
     ospf_attack/cli/main.py
 ```
 
-Output: `dist/ospf-attack.exe` (~45MB, self-contained for Win7+ 32/64-bit)
+编译产物：`dist/ospf-attack.exe`（~45MB，自包含，支持 Win7+ 32/64 位）
 
 ---
 
-## 11. Anti-Patterns Explicitly Avoided
+## 11. 明确避免的反模式
 
-- No ARP spoofing — hub environment assumed for passive sniffing
-- No neighbor adjacency required for any attack (all work in passive mode)
-- No external Python/runtime dependencies at deployment time (single .exe)
-- Attack modules never share mutable state (each attack is independently runnable)
-- No write-to-disk required except for optional pcap output and Npcap installer extraction
+- 不使用 ARP 欺骗 — 旁路嗅探基于集线器环境假设
+- 不强制建立邻居关系 — 所有攻击均支持旁路模式
+- 不要求部署时安装任何外部依赖 — 单 `.exe` 自包含
+- 攻击模块不共享可变状态 — 每种攻击独立可运行
+- 除了可选的 pcap 输出和 Npcap 安装程序提取外，不进行磁盘写入
