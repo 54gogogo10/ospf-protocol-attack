@@ -49,6 +49,7 @@ OSPF_Protocol_Attack/
 │   │   ├── lsa_db.py                 # 链路状态数据库模拟
 │   │   ├── router.py                 # 虚拟路由器身份（ID、区域、认证）
 │   │   ├── sniffer.py                # 被动嗅探引擎
+│   │   ├── arp_spoof.py              # ARP 欺骗引擎（交换环境用）
 │   │   └── event.py                  # 事件总线，解耦通信
 │   ├── attacks/                      # 攻击插件
 │   │   ├── __init__.py
@@ -113,9 +114,10 @@ OSPF_Protocol_Attack/
 
 1. **插件式架构** — 每个攻击类型为独立模块，实现 `AttackBase` 接口
 2. **双模式攻击** — PASSIVE（旁路，不建邻居）/ ACTIVE（主动，建邻居后攻击）
-3. **事件总线** — 攻击逻辑与网络传输层解耦
-4. **三层配置优先级** — 默认值 → YAML 配置文件 → CLI 参数，后者覆盖前者
-5. **自包含部署** — 单 `.exe` 内嵌 Npcap，启动时自动检测 + 提示安装
+3. **双环境嗅探** — HUB（集线器，直接混杂嗅探）/ ARP_SPOOF（交换环境，先 ARP 欺骗再嗅探）
+4. **事件总线** — 攻击逻辑与网络传输层解耦
+5. **三层配置优先级** — 默认值 → YAML 配置文件 → CLI 参数，后者覆盖前者
+6. **自包含部署** — 单 `.exe` 内嵌 Npcap，启动时自动检测 + 提示安装
 
 ---
 
@@ -129,6 +131,10 @@ from dataclasses import dataclass, field
 class AttackMode(Enum):
     PASSIVE = "passive"       # 旁路：不建邻居，嗅探 + 注入
     ACTIVE  = "active"        # 主动：先建邻居，借助邻居关系攻击
+
+class SniffMode(Enum):
+    HUB       = "hub"         # 集线器环境：直接混杂模式嗅探
+    ARP_SPOOF = "arp_spoof"   # 交换环境：先 ARP 欺骗，再嗅探
 
 class AttackCategory(Enum):
     ADJACENCY = "adjacency"   # 邻接关系
@@ -216,7 +222,7 @@ class BaseAttack(ABC):
 
 | # | 模块 | 默认模式 | 攻击手法 | 验证指标 |
 |---|------|---------|---------|---------|
-| 11 | `mitm` | 旁路 | 集线器环境：混杂模式嗅探 → 篡改 OSPF 字段 → 转发被篡改报文 | 目标路由表反映被篡改 LSA 的内容 |
+| 11 | `mitm` | 旁路 | 可选集线器模式（直接混杂嗅探）或 ARP 欺骗模式（欺骗后嗅探），拦截 OSPF 报文 → 篡改 → 转发 | 目标路由表反映被篡改 LSA 的内容 |
 | 12 | `replay` | 旁路 | 捕获合法 OSPF 报文 → 延后重放（可选修改字段）引发路由震荡 | 目标路由表震荡，LSDB 出现序列号回退 |
 
 ---
@@ -232,11 +238,17 @@ class AttackConfig:
     iface: str                              # 网卡接口
     target: str                             # 目标 IP 或网段
     mode: AttackMode = AttackMode.PASSIVE   # 攻击模式
+    sniff_mode: SniffMode = SniffMode.HUB   # 嗅探模式：hub / arp_spoof
     router_id: str = "1.1.1.1"             # 伪装的路由器 ID
     area_id: str = "0.0.0.0"               # OSPF 区域
 
     # 嗅探参数
     sniff_duration: int = 30                # 嗅探持续时间（秒）
+
+    # ARP 欺骗参数（仅 sniff_mode=arp_spoof 时生效）
+    arp_target_a: str = ""                  # ARP 欺骗目标 A IP
+    arp_target_b: str = ""                  # ARP 欺骗目标 B IP
+    arp_interval: int = 2                   # ARP 欺骗包发送间隔（秒）
 
     # 发包参数
     packet_rate: int = 10                   # 每秒发包数（pps）
@@ -305,17 +317,24 @@ class ReplayConfig(AttackConfig):
 ### 6.4 CLI 使用示例
 
 ```bash
-# 旁路 Hello 注入
+# 旁路 Hello 注入（集线器模式）
 ospf-attack hello-inject --iface eth0 --target 192.168.1.0/24 \
-    --passive --priority 255 --sniff-duration 30
+    --passive --sniff-mode hub --priority 255 --sniff-duration 30
 
-# Max-Age 攻击清除 LSA
+# Max-Age 攻击清除 LSA（ARP 欺骗模式下嗅探）
 ospf-attack max-age --iface eth0 --target 224.0.0.5 \
-    --passive --age 3600 --lsa-type 1
+    --passive --sniff-mode arp_spoof \
+    --arp-target-a 10.0.0.1 --arp-target-b 10.0.0.2 \
+    --age 3600 --lsa-type 1
 
-# DoS 泛洪
+# DoS 泛洪（无需 ARP 欺骗，直接发包）
 ospf-attack flood --iface eth0 --target 224.0.0.5 \
     --duration 60 --packet-rate 500 --thread-count 4
+
+# MITM（ARP 欺骗模式）
+ospf-attack mitm --iface eth1 --target 10.0.0.0/24 \
+    --sniff-mode arp_spoof --target-a 10.0.0.1 --target-b 10.0.0.2 \
+    --action modify
 
 # 从 YAML 配置文件加载
 ospf-attack mitm --config ./mitm_attack.yaml
@@ -324,11 +343,11 @@ ospf-attack mitm --config ./mitm_attack.yaml
 ### 6.5 YAML 配置文件示例
 
 ```yaml
-# mitm_attack.yaml
+# mitm_attack_hub.yaml（集线器环境）
 attack: mitm
 iface: eth1
-target_a: 10.0.0.1
-target_b: 10.0.0.2
+target: 10.0.0.0/24
+sniff_mode: hub
 mode: passive
 sniff_duration: 60
 action: modify
@@ -339,6 +358,22 @@ modify_rules:
     add: 100
 verbose: true
 pcap_output: ./attack_capture.pcap
+
+# mitm_attack_arp.yaml（交换环境，ARP 欺骗）
+attack: mitm
+iface: eth1
+target: 10.0.0.0/24
+sniff_mode: arp_spoof
+arp_target_a: 10.0.0.1
+arp_target_b: 10.0.0.2
+arp_interval: 2
+mode: passive
+sniff_duration: 60
+action: modify
+modify_rules:
+  - field: lsa.age
+    set: 3600
+verbose: true
 ```
 
 ---
@@ -370,7 +405,9 @@ pcap_output: ./attack_capture.pcap
 
 ---
 
-## 8. 数据流（旁路模式）
+## 8. 数据流
+
+### 8.1 集线器模式（sniff_mode=hub）
 
 ```
 [OSPF 网络] ── 混杂嗅探 ──→ Sniffer (pcap-ct)
@@ -396,6 +433,34 @@ pcap_output: ./attack_capture.pcap
                                   │
                                   ▼
                        Attack.verify() ── 重新嗅探，对比状态
+```
+
+### 8.2 ARP 欺骗模式（sniff_mode=arp_spoof）
+
+```
+ARP 欺骗引擎启动
+    ├─ 向 arp_target_a 持续发送：我是 arp_target_b 的 MAC
+    ├─ 向 arp_target_b 持续发送：我是 arp_target_a 的 MAC
+    └─ 开启 IP 转发（允许攻击机转发双方流量）
+            │
+            ▼
+路由器 A/B 互发流量 ──→ 经过攻击机网卡 ──→ Sniffer (pcap-ct)
+            │                                       │
+            ▼                                       ▼
+    MITM 攻击处理                            报文解析器 (Scapy)
+    ├─ action=modify: 篡改 OSPF 字段后转发         │
+    ├─ action=drop:   丢弃报文                     ▼
+    ├─ action=forward: 原样转发                 拓扑模型
+    └─ action=inject: 额外注入伪造报文              │
+                                                   ▼
+                                         Attack.launch()
+                                         Attack.verify()
+
+          ┌──── 攻击机 teardown() 时 ────┐
+          │ 停止 ARP 欺骗线程            │
+          │ 发送正确 ARP 恢复缓存         │
+          │ 关闭 IP 转发                 │
+          └──────────────────────────────┘
 ```
 
 ---
@@ -440,6 +505,8 @@ pyinstaller `
     --hidden-import pcap `
     --hidden-import click `
     --hidden-import yaml `
+    --hidden-import scapy.layers.l2 `
+    --hidden-import scapy.layers.inet `
     ospf_attack/cli/main.py
 ```
 
@@ -449,8 +516,39 @@ pyinstaller `
 
 ## 11. 明确避免的反模式
 
-- 不使用 ARP 欺骗 — 旁路嗅探基于集线器环境假设
 - 不强制建立邻居关系 — 所有攻击均支持旁路模式
 - 不要求部署时安装任何外部依赖 — 单 `.exe` 自包含
 - 攻击模块不共享可变状态 — 每种攻击独立可运行
 - 除了可选的 pcap 输出和 Npcap 安装程序提取外，不进行磁盘写入
+- ARP 欺骗结束后必须恢复目标 ARP 缓存，避免残留影响
+
+---
+
+## 12. ARP 欺骗引擎设计要点
+
+### 启动流程
+
+```
+setup() 中调用 ARP 欺骗引擎：
+    │
+    ├─ 校验 arp_target_a / arp_target_b 均已配置
+    ├─ 解析目标 IP 的 MAC 地址
+    ├─ 获取本机 MAC（伪造用）
+    ├─ 开启 IP 转发（Linux: /proc/sys/net/ipv4/ip_forward；Windows: 注册表）
+    ├─ 启动后台线程：每 arp_interval 秒
+    │   ├─ 发送 ARP 响应（arp_target_a: 我是 arp_target_b 的 MAC）
+    │   └─ 发送 ARP 响应（arp_target_b: 我是 arp_target_a 的 MAC）
+    └─ 记录日志：ARP 欺骗已建立
+```
+
+### 清理流程
+
+```
+teardown() 中调用 ARP 欺骗引擎清理：
+    │
+    ├─ 停止后台发送线程
+    ├─ 发送正确 ARP 响应（恢复双方 ARP 缓存）
+    ├─ 关闭 IP 转发
+    └─ 记录日志：ARP 欺骗已清除
+```
+
