@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta:__legacy__"
+
+[project]
+name = "ospf-attack"
+version = "0.1.0"
+description = "OSPF Protocol Attack Simulator"
+requires-python = ">=3.10"
+dependencies = [
+    "scapy>=2.5.0",
+    "click>=8.1.0",
+    "pyyaml>=6.0",
+    "pcap-ct>=1.1.0",
+]
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+]
+
+[project.scripts]
+ospf-attack = "ospf_attack.cli.main:cli"
+
+[tool.setuptools.packages.find]
+include = ["ospf_attack*"]
