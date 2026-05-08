@@ -67,7 +67,8 @@
       "Bash('/c/Program Files/GitHub CLI/gh.exe' pr create --title 'feat: OSPF 协议攻击模拟器初始实现' --body ' *)",
       "Bash(rm test_seq.py)",
       "Bash(pytest tests/unit/ -q)",
-      "Bash(pytest tests/unit/test_cli.py -v)"
+      "Bash(pytest tests/unit/test_cli.py -v)",
+      "Bash(git push *)"
     ]
   }
 }

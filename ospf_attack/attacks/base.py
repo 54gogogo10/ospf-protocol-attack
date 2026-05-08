@@ -1,3 +1,5 @@
+import time
+import threading
 from abc import ABC, abstractmethod
 from ospf_attack.config.types import AttackResult, AttackMode, AttackCategory, SniffMode
 
@@ -7,11 +9,13 @@ class BaseAttack(ABC):
     description: str = ""
     category: AttackCategory
     default_mode: AttackMode = AttackMode.PASSIVE
+    needs_repeated: bool = False
 
     def __init__(self, config):
         self.config = config
         self._sniffer = None
         self._sender = None
+        self._should_stop = False
 
     @abstractmethod
     def setup(self) -> None:
@@ -29,12 +33,19 @@ class BaseAttack(ABC):
     def teardown(self) -> None:
         """阶段四：清理资源"""
 
+    def send_one_round(self) -> bool:
+        """Override in subclasses for repeated attacks. Returns True if successful."""
+        return False
+
     def run(self) -> AttackResult:
         result = None
         try:
             self.setup()
-            result = self.launch()
-            result.target_affected = self.verify()
+            if self.needs_repeated:
+                result = self._run_repeated()
+            else:
+                result = self.launch()
+                result.target_affected = self.verify()
         except Exception as e:
             result = AttackResult(
                 success=False, packets_sent=0, target_affected=False,
@@ -47,3 +58,19 @@ class BaseAttack(ABC):
                 if result is not None:
                     result.details += f" (teardown 异常: {e})"
         return result
+
+    def _run_repeated(self) -> AttackResult:
+        deadline = time.time() + self.config.sniff_duration
+        rounds = 0
+        while time.time() < deadline and not self._should_stop:
+            if self.send_one_round():
+                rounds += 1
+            time.sleep(max(1.0, 0.1))
+
+        total_sent = self._sender.sent_count if self._sender else 0
+        return AttackResult(
+            success=rounds > 0,
+            packets_sent=total_sent,
+            target_affected=False,
+            details=f"{self.name}: {rounds} rounds, {total_sent} packets sent",
+        )

