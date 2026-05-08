@@ -24,8 +24,14 @@ class LSADatabase:
     def add(self, entry: LSAEntry) -> None:
         key = self._key(entry.lsa_type, entry.link_state_id, entry.advertising_router)
         existing = self._entries.get(key)
-        if existing is None or entry.sequence > existing.sequence:
+        if existing is None or self._seq_newer(entry.sequence, existing.sequence):
             self._entries[key] = entry
+
+    @staticmethod
+    def _seq_newer(a: int, b: int) -> bool:
+        """RFC 2328 Section 13.1: signed 32-bit sequence comparison."""
+        import ctypes
+        return ctypes.c_int32(a - b).value > 0
 
     def get(self, lsa_type: int, link_state_id: str, adv_router: str) -> Optional[LSAEntry]:
         return self._entries.get(self._key(lsa_type, link_state_id, adv_router))

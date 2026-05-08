@@ -30,10 +30,20 @@ class BaseAttack(ABC):
         """阶段四：清理资源"""
 
     def run(self) -> AttackResult:
+        result = None
         try:
             self.setup()
             result = self.launch()
             result.target_affected = self.verify()
-            return result
+        except Exception as e:
+            result = AttackResult(
+                success=False, packets_sent=0, target_affected=False,
+                details=f"攻击执行失败: {e}",
+            )
         finally:
-            self.teardown()
+            try:
+                self.teardown()
+            except Exception as e:
+                if result is not None:
+                    result.details += f" (teardown 异常: {e})"
+        return result
