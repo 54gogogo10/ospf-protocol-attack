@@ -17,9 +17,9 @@ def install_npcap() -> bool:
     if not os.path.exists(installer):
         print(f"Npcap 安装程序未找到: {installer}")
         return False
-    print("正在静默安装 Npcap...")
+    print("正在启动 Npcap 安装程序...")
     try:
-        result = subprocess.run([installer, "/S"], capture_output=True, timeout=120)
+        result = subprocess.run([installer], timeout=300)
         if result.returncode == 0:
             print("Npcap 安装成功！")
             return True
