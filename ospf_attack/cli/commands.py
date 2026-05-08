@@ -9,6 +9,7 @@ from ospf_attack.config.types import (
     AttackMode,
     SniffMode,
 )
+from ospf_attack.config.config import build_config
 from ospf_attack.attacks.adjacency.hello_inject import HelloInjectAttack
 from ospf_attack.attacks.adjacency.adjacency_break import AdjacencyBreakAttack
 from ospf_attack.attacks.adjacency.dr_bdr_hijack import DRBDRHijackAttack
@@ -54,6 +55,7 @@ def _common_options(f):
         click.option("--packet-rate", type=int, default=10),
         click.option("--max-packets", type=int, default=0),
         click.option("--verbose/--no-verbose", default=False),
+        click.option("--config", "config_file", default=""),
         click.option("--pcap-output", default=""),
         click.option("--output", type=click.Choice(["table", "json"]), default="table"),
     ]
@@ -65,30 +67,22 @@ def _common_options(f):
 
 def _run_attack(attack_cls, config_cls, **kwargs):
     output_fmt = kwargs.pop("output", "table")
+    config_file = kwargs.pop("config_file", "")
 
     mode = AttackMode.PASSIVE
-    if "mode_flag" in kwargs and kwargs["mode_flag"] is not None:
-        mode = AttackMode.PASSIVE if kwargs.pop("mode_flag") else AttackMode.ACTIVE
+    if kwargs.get("mode_flag") is True:
+        kwargs["mode"] = "passive"
+    elif kwargs.get("mode_flag") is False:
+        kwargs["mode"] = "active"
 
-    sniff_mode = SniffMode(kwargs.pop("sniff_mode", "hub"))
-
-    config = config_cls(
-        iface=kwargs.pop("iface"),
-        target=kwargs.pop("target"),
-        mode=mode,
-        sniff_mode=sniff_mode,
-        router_id=kwargs.pop("router_id", "1.1.1.1"),
-        area_id=kwargs.pop("area_id", "0.0.0.0"),
-        sniff_duration=kwargs.pop("sniff_duration", 30),
-        arp_target_a=kwargs.pop("arp_target_a", ""),
-        arp_target_b=kwargs.pop("arp_target_b", ""),
-        arp_interval=kwargs.pop("arp_interval", 2),
-        packet_rate=kwargs.pop("packet_rate", 10),
-        max_packets=kwargs.pop("max_packets", 0),
-        verbose=kwargs.pop("verbose", False),
-        pcap_output=kwargs.pop("pcap_output", ""),
-        **kwargs,
-    )
+    config = build_config(attack_cls.name, kwargs, config_file)
+    if config is None:
+        config = config_cls(
+            iface=kwargs.get("iface", "eth0"),
+            target=kwargs.get("target", "224.0.0.5"),
+            mode=mode,
+            sniff_mode=SniffMode(kwargs.get("sniff_mode", "hub")),
+        )
 
     attack = attack_cls(config)
     result = attack.run()

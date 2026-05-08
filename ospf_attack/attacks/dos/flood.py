@@ -38,7 +38,7 @@ class FloodAttack(BaseAttack):
             t.start()
             threads.append(t)
 
-        time.sleep(min(self.config.duration, 5))
+        time.sleep(self.config.duration)
         self._stop_event.set()
         for t in threads:
             t.join(timeout=2)

