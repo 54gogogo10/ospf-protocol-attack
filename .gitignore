@@ -17,3 +17,6 @@ build/
 .env
 .venv/
 venv/
+dist/
+build/
+*.spec

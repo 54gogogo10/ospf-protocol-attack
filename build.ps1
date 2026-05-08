@@ -13,6 +13,7 @@ if (-not (Test-Path "assets/npcap-installer.exe")) {
 pyinstaller `
     --onefile `
     --name "ospf-attack" `
+    --add-binary "assets/npcap-installer.exe;." `
     --hidden-import scapy.contrib.ospf `
     --hidden-import scapy.layers.l2 `
     --hidden-import scapy.layers.inet `
