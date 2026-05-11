@@ -187,17 +187,17 @@ def get_network_interfaces() -> list[str]:
 FIELD_META: dict[str, dict] = {
     # -- 通用参数 (AttackConfig) --
     "iface":          {"widget": "iface",   "label": "网卡接口"},
-    "target":         {"widget": "entry",   "label": "目标地址"},
+    "target":         {"widget": "entry",   "label": "目标地址", "default": "224.0.0.5"},
     "mode":           {"widget": "radio",   "label": "攻击模式", "choices": ["passive", "active"]},
     "sniff_mode":     {"widget": "radio",   "label": "嗅探模式", "choices": ["hub", "arp_spoof"]},
-    "router_id":      {"widget": "entry",   "label": "伪装路由器 ID"},
-    "area_id":        {"widget": "entry",   "label": "OSPF 区域"},
-    "sniff_duration": {"widget": "spinbox", "label": "嗅探时长(秒)", "from_": 1, "to": 3600},
+    "router_id":      {"widget": "entry",   "label": "伪装路由器 ID", "default": "1.1.1.1"},
+    "area_id":        {"widget": "entry",   "label": "OSPF 区域", "default": "0.0.0.0"},
+    "sniff_duration": {"widget": "spinbox", "label": "嗅探时长(秒)", "from_": 1, "to": 3600, "default": 30},
     "arp_target_a":   {"widget": "entry",   "label": "ARP 欺骗目标 A"},
     "arp_target_b":   {"widget": "entry",   "label": "ARP 欺骗目标 B"},
-    "arp_interval":   {"widget": "spinbox", "label": "ARP 间隔(秒)", "from_": 1, "to": 60},
-    "packet_rate":    {"widget": "spinbox", "label": "发包速率(pps)", "from_": 1, "to": 10000},
-    "max_packets":    {"widget": "spinbox", "label": "最大发包数(0=不限)", "from_": 0, "to": 1000000},
+    "arp_interval":   {"widget": "spinbox", "label": "ARP 间隔(秒)", "from_": 1, "to": 60, "default": 2},
+    "packet_rate":    {"widget": "spinbox", "label": "发包速率(pps)", "from_": 1, "to": 10000, "default": 10},
+    "max_packets":    {"widget": "spinbox", "label": "最大发包数(0=不限)", "from_": 0, "to": 1000000, "default": 0},
     "verbose":        {"widget": "check",   "label": "详细输出"},
     "pcap_output":    {"widget": "entry",   "label": "PCAP 保存路径"},
 
@@ -334,6 +334,8 @@ class ConfigForm(tk.Frame):
 
         self._specific_frame = ttk.LabelFrame(self._scroll_frame, text="攻击专属参数", padding=8)
 
+        self._preview = PacketPreview(self._scroll_frame, self)
+
     def set_attack(self, attack_name: str):
         """切换攻击类型，重建专属参数区。"""
         self._attack_name = attack_name
@@ -356,8 +358,11 @@ class ConfigForm(tk.Frame):
         # 按顺序 pack
         self._common_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(PAD_OUTER, 0))
         self._specific_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(SECTION_GAP, 0))
+        self._preview.pack(fill=tk.BOTH, padx=PAD_OUTER, pady=(SECTION_GAP, 0))
         # ARP 面板根据 sniff_mode 决定显隐
         self._toggle_arp()
+        # 刷新报文预览
+        self._preview.refresh()
 
     def get_config_dict(self) -> dict:
         """收集所有表单参数。"""
@@ -450,6 +455,156 @@ def _open_routes_editor(parent: ttk.Frame, holder: RoutesHolder, count_var: tk.S
     _update_routes_label(holder, count_var)
 
 
+# ---------------------------------------------------------------------------
+# 报文预览
+# ---------------------------------------------------------------------------
+
+def _format_ospf_preview(form: "ConfigForm") -> str:
+    """根据当前表单值构造 OSPF 报文并按协议格式展示。"""
+    w = form._widgets
+    attack = form._attack_name or ""
+
+    def _get(key, default=""):
+        v = w.get(key)
+        if v is None:
+            return default
+        try:
+            return v.get()
+        except Exception:
+            return str(v) if v else default
+
+    iface = _get("iface", "eth0")
+    target = _get("target", "224.0.0.5")
+    rid = _get("router_id", "1.1.1.1")
+    aid = _get("area_id", "0.0.0.0")
+    mode = _get("mode", "passive")
+    sniff = _get("sniff_mode", "hub")
+
+    # Try to get src IP
+    src_ip = "(unknown)"
+    try:
+        from ospf_attack.network.adapter import get_local_ip
+        src_ip = get_local_ip(iface)
+    except Exception:
+        pass
+
+    lines = []
+    lines.append("┌── IP Header ──────────────────────────┐")
+    lines.append(f"│ Src : {src_ip:<30} │")
+    lines.append(f"│ Dst : {target:<30} │")
+    lines.append(f"│ Proto: OSPF (89)   TTL: 1             │")
+    lines.append("├── OSPF Header ────────────────────────┤")
+    lines.append(f"│ Version: 2   Type: (unknown)         │")
+    lines.append(f"│ Router ID : {rid:<24} │")
+    lines.append(f"│ Area ID   : {aid:<24} │")
+    lines.append(f"│ Auth: Null                            │")
+
+    # Attack-specific body
+    if attack in ("hello-inject", "adjacency-break", "dr-bdr-hijack"):
+        hi = _get("hello_interval", "10")
+        di = _get("router_dead_interval", "40")
+        pri = _get("router_priority", "255")
+        mask = _get("subnet_mask", "255.255.255.0")
+        lines.append("├── OSPF Hello ─────────────────────────┤")
+        lines.append(f"│ Network Mask : {mask:<22} │")
+        lines.append(f"│ Hello Interval: {hi}s   Dead: {di}s         │")
+        lines.append(f"│ Priority: {pri:<3}   Options: 0x02          │")
+        lines.append(f"│ DR: 0.0.0.0   BDR: 0.0.0.0          │")
+
+    elif attack in ("route-inject", "max-seq", "max-age", "fight-back"):
+        lsa_type = _get("lsa_type", "5")
+        lsid = _get("link_state_id", rid)
+        adv = _get("advertising_router", rid)
+        seq = _get("sequence_number", "0x80000001")
+        age = _get("age", "0")
+        metric = _get("metric", "20")
+        nmask = _get("network_mask", "255.255.255.0")
+        fwd = _get("forwarding_address", "0.0.0.0")
+        routes = _get("external_routes")
+        n_routes = len(routes) if isinstance(routes, list) else 0
+
+        lsa_names = {"1": "Router", "3": "Summary", "5": "External"}
+        lsa_name = lsa_names.get(str(lsa_type), f"Type-{lsa_type}")
+
+        lines.append("├── OSPF LSU ────────────────────────────┤")
+        lines.append(f"│ LSA Count: {1 + n_routes:<26} │")
+        lines.append("├── LSA Header ─────────────────────────┤")
+        lines.append(f"│ Type: {lsa_name:<4}  LS ID: {lsid:<16} │")
+        lines.append(f"│ Adv Router: {adv:<23} │")
+        lines.append(f"│ Sequence: {seq:<10}  Age: {age:<5}s     │")
+        lines.append("├── LSA Body ───────────────────────────┤")
+        if str(lsa_type) == "5":
+            lines.append(f"│ Network Mask: {nmask:<22} │")
+            lines.append(f"│ Metric: {metric:<5}  Fwd Addr: {fwd:<12} │")
+        elif str(lsa_type) == "3":
+            lines.append(f"│ Network Mask: {nmask:<22} │")
+            lines.append(f"│ Metric: {metric:<28} │")
+        if n_routes:
+            lines.append(f"│ + {n_routes} 条伪造路由条目               │")
+
+    elif attack in ("flood", "spf-recalc", "db-overflow"):
+        dur = _get("duration", "60")
+        rate = _get("packet_rate", "10")
+        lines.append("├── DoS 攻击参数 ────────────────────────┤")
+        lines.append(f"│ Duration: {dur}s   Rate: {rate} pps        │")
+        if attack == "spf-recalc":
+            interval = _get("lsa_change_interval", "2")
+            lines.append(f"│ LSA Change Interval: {interval}s              │")
+        elif attack == "db-overflow":
+            count = _get("lsa_count", "1000")
+            lines.append(f"│ LSA Count: {count:<26} │")
+
+    elif attack in ("mitm",):
+        action = _get("action", "modify")
+        ta = _get("target_a", "")
+        tb = _get("target_b", "")
+        lines.append("├── MITM 参数 ───────────────────────────┤")
+        lines.append(f"│ Action: {action:<27} │")
+        lines.append(f"│ Target A: {ta:<25} │")
+        lines.append(f"│ Target B: {tb:<25} │")
+
+    elif attack in ("replay",):
+        cap = _get("capture_file", "")
+        loop = _get("replay_loop", False)
+        lines.append("├── Replay 参数 ─────────────────────────┤")
+        lines.append(f"│ Capture: {str(cap)[:28]:<28} │")
+        lines.append(f"│ Loop: {str(loop):<31} │")
+
+    lines.append("└────────────────────────────────────────┘")
+    return "\n".join(lines)
+
+
+class PacketPreview(ttk.LabelFrame):
+    """报文预览面板 — 显示构造的 OSPF 报文结构。"""
+
+    def __init__(self, parent, form: "ConfigForm", **kw):
+        super().__init__(parent, text="报文预览", padding=6, **kw)
+        self._form = form
+
+        bar = ttk.Frame(self)
+        bar.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(bar, text="刷新预览", command=self.refresh).pack(side=tk.RIGHT)
+
+        self._text = tk.Text(self, font=("Consolas", 9), width=42, height=18,
+                             bg="#1e1e1e", fg="#d4d4d4",
+                             insertbackground="#ffffff",
+                             relief=tk.FLAT, state=tk.DISABLED,
+                             wrap=tk.NONE)
+        self._text.pack(fill=tk.BOTH, expand=True)
+
+        self.refresh()
+
+    def refresh(self):
+        try:
+            preview = _format_ospf_preview(self._form)
+        except Exception:
+            preview = "(报文预览不可用)"
+        self._text.configure(state=tk.NORMAL)
+        self._text.delete("1.0", tk.END)
+        self._text.insert("1.0", preview)
+        self._text.configure(state=tk.DISABLED)
+
+
 def _build_field_row(parent: ttk.Frame, field_name: str, row: int, form: "ConfigForm"):
     """在父容器中创建一行: 标签 + 输入控件。注册到 form._widgets。"""
     meta = FIELD_META.get(field_name, {})
@@ -468,7 +623,8 @@ def _build_field_row(parent: ttk.Frame, field_name: str, row: int, form: "Config
         form._widgets[field_name] = var
 
     elif wtype == "entry":
-        var = tk.StringVar()
+        default = meta.get("default", "")
+        var = tk.StringVar(value=str(default))
         w = ttk.Entry(parent, textvariable=var, font=FONT_ENTRY, width=32)
         w.grid(row=row, column=1, sticky=tk.EW, pady=PAD_FORM)
         form._widgets[field_name] = var
@@ -476,7 +632,8 @@ def _build_field_row(parent: ttk.Frame, field_name: str, row: int, form: "Config
     elif wtype == "spinbox":
         from_ = meta.get("from_", 0)
         to = meta.get("to", 65535)
-        var = tk.StringVar(value=str(from_))
+        default = meta.get("default", from_)
+        var = tk.StringVar(value=str(default))
         w = ttk.Spinbox(parent, from_=from_, to=to, textvariable=var,
                         font=FONT_ENTRY, width=30)
         w.grid(row=row, column=1, sticky=tk.EW, pady=PAD_FORM)
