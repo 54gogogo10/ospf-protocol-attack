@@ -202,40 +202,40 @@ FIELD_META: dict[str, dict] = {
     "pcap_output":    {"widget": "entry",   "label": "PCAP 保存路径"},
 
     # -- HelloInjectionConfig 专属 --
-    "hello_interval":       {"widget": "spinbox", "label": "Hello 间隔(秒)", "from_": 1, "to": 65535},
-    "router_dead_interval": {"widget": "spinbox", "label": "Dead 间隔(秒)", "from_": 1, "to": 65535},
-    "router_priority":      {"widget": "spinbox", "label": "路由器优先级", "from_": 0, "to": 255},
-    "auth_type":            {"widget": "combo",   "label": "认证类型", "choices": ["none", "plain", "md5"]},
+    "hello_interval":       {"widget": "spinbox", "label": "Hello 间隔(秒)", "from_": 1, "to": 65535, "default": 10},
+    "router_dead_interval": {"widget": "spinbox", "label": "Dead 间隔(秒)", "from_": 1, "to": 65535, "default": 40},
+    "router_priority":      {"widget": "spinbox", "label": "路由器优先级", "from_": 0, "to": 255, "default": 255},
+    "auth_type":            {"widget": "combo",   "label": "认证类型", "choices": ["none", "plain", "md5"], "default": "none"},
     "auth_key":             {"widget": "entry",   "label": "认证密钥"},
-    "subnet_mask":          {"widget": "entry",   "label": "子网掩码"},
+    "subnet_mask":          {"widget": "entry",   "label": "子网掩码", "default": "255.255.255.0"},
 
     # -- LSAConfig 专属 --
-    "lsa_type":            {"widget": "combo",   "label": "LSA 类型", "choices": ["1", "3", "5"]},
+    "lsa_type":            {"widget": "combo",   "label": "LSA 类型", "choices": ["1", "3", "5"], "default": "5"},
     "link_state_id":       {"widget": "entry",   "label": "Link State ID"},
     "advertising_router":  {"widget": "entry",   "label": "通告路由器"},
-    "sequence_number":     {"widget": "entry",   "label": "序列号 (hex)"},
-    "age":                 {"widget": "spinbox", "label": "Age (秒)", "from_": 0, "to": 3600},
-    "metric":              {"widget": "spinbox", "label": "Metric", "from_": 0, "to": 16777215},
-    "network_mask":        {"widget": "entry",   "label": "网络掩码"},
-    "forwarding_address":  {"widget": "entry",   "label": "转发地址"},
+    "sequence_number":     {"widget": "entry",   "label": "序列号 (hex)", "default": "0x80000001"},
+    "age":                 {"widget": "spinbox", "label": "Age (秒)", "from_": 0, "to": 3600, "default": 0},
+    "metric":              {"widget": "spinbox", "label": "Metric", "from_": 0, "to": 16777215, "default": 20},
+    "network_mask":        {"widget": "entry",   "label": "网络掩码", "default": "255.255.255.0"},
+    "forwarding_address":  {"widget": "entry",   "label": "转发地址", "default": "0.0.0.0"},
     "external_routes":     {"widget": "routes",  "label": "伪造路由条目"},
 
     # -- DoSConfig 专属 --
-    "duration":             {"widget": "spinbox", "label": "持续时间(秒)", "from_": 1, "to": 86400},
-    "thread_count":         {"widget": "spinbox", "label": "并发线程数", "from_": 1, "to": 100},
-    "lsa_change_interval":  {"widget": "spinbox", "label": "LSA 变化间隔(秒)", "from_": 1, "to": 3600},
-    "lsa_count":            {"widget": "spinbox", "label": "注入 LSA 数量", "from_": 1, "to": 100000},
+    "duration":             {"widget": "spinbox", "label": "持续时间(秒)", "from_": 1, "to": 86400, "default": 60},
+    "thread_count":         {"widget": "spinbox", "label": "并发线程数", "from_": 1, "to": 100, "default": 1},
+    "lsa_change_interval":  {"widget": "spinbox", "label": "LSA 变化间隔(秒)", "from_": 1, "to": 3600, "default": 2},
+    "lsa_count":            {"widget": "spinbox", "label": "注入 LSA 数量", "from_": 1, "to": 100000, "default": 1000},
 
     # -- MITMConfig 专属 --
     "target_a":    {"widget": "entry",   "label": "路由器 A IP"},
     "target_b":    {"widget": "entry",   "label": "路由器 B IP"},
-    "action":      {"widget": "combo",   "label": "操作类型", "choices": ["drop", "modify", "forward", "inject"]},
+    "action":      {"widget": "combo",   "label": "操作类型", "choices": ["drop", "modify", "forward", "inject"], "default": "modify"},
     "modify_rules":{"widget": "entry",   "label": "修改规则 (JSON)"},
 
     # -- ReplayConfig 专属 --
     "capture_file":   {"widget": "entry",   "label": "捕获文件路径"},
     "replay_loop":    {"widget": "check",   "label": "循环重放"},
-    "replay_interval":{"widget": "spinbox", "label": "重放间隔(秒)", "from_": 1, "to": 3600},
+    "replay_interval":{"widget": "spinbox", "label": "重放间隔(秒)", "from_": 1, "to": 3600, "default": 5},
     "modify_fields":  {"widget": "entry",   "label": "修改字段 (JSON)"},
 }
 
@@ -641,7 +641,8 @@ def _build_field_row(parent: ttk.Frame, field_name: str, row: int, form: "Config
 
     elif wtype == "combo":
         choices = meta.get("choices", [])
-        var = tk.StringVar(value=choices[0] if choices else "")
+        default = meta.get("default", choices[0] if choices else "")
+        var = tk.StringVar(value=str(default))
         w = ttk.Combobox(parent, textvariable=var, values=choices,
                          font=FONT_ENTRY, width=30, state="readonly")
         w.grid(row=row, column=1, sticky=tk.EW, pady=PAD_FORM)
