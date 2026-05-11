@@ -539,7 +539,14 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
             lines.append(f"│ Network Mask: {nmask:<22} │")
             lines.append(f"│ Metric: {metric:<28} │")
         if n_routes:
-            lines.append(f"│ + {n_routes} 条伪造路由条目               │")
+            lines.append("├── 伪造路由条目 ─────────────────────────┤")
+            for i, r in enumerate(routes):
+                r_net = r.get("network", "-")
+                r_mask = r.get("mask", "255.255.255.0")
+                r_metric = r.get("metric", 20)
+                r_fwd = r.get("forward", "0.0.0.0")
+                lines.append(f"│ #{i + 1} {r_net}/{r_mask}")
+                lines.append(f"│    Metric: {r_metric}  Fwd: {r_fwd}")
 
     elif attack in ("flood", "spf-recalc", "db-overflow"):
         dur = _get("duration", "60")
