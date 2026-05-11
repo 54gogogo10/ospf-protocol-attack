@@ -5,8 +5,10 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+import yaml
+
 from .styles import (
-    BG_MAIN, FONT_TITLE, FONT_STATUS, FONT_BUTTON,
+    BG_MAIN, FONT_TITLE, FONT_STATUS,
     PAD_OUTER, PAD_INNER, WINDOW_WIDTH, WINDOW_HEIGHT,
     WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT,
     LOG_MIN_HEIGHT, TREE_MIN_WIDTH,
@@ -212,7 +214,6 @@ class MainWindow:
             return
         config_dict = self._form.get_config_dict()
         config_dict["attack"] = self._current_attack
-        import yaml
         with open(path, "w", encoding="utf-8") as f:
             yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False)
         self._log_queue.put(("INFO", f"配置已保存到: {path}"))
@@ -224,7 +225,6 @@ class MainWindow:
         )
         if not path:
             return
-        import yaml
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         attack_name = data.pop("attack", None)

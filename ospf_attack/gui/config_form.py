@@ -14,6 +14,8 @@ from .styles import FONT_LABEL, FONT_ENTRY, PAD_FORM, PAD_OUTER, SECTION_GAP
 
 ROUTE_COLUMNS = ("network", "mask", "metric", "etype", "forward")
 
+LSA_TYPE_NAMES = {"1": "Router", "3": "Summary", "5": "External"}
+
 
 class RoutesHolder:
     """持有路由条目列表，兼容 StringVar 的 get/set 接口。"""
@@ -37,12 +39,10 @@ class RoutesHolder:
 class RoutesEditor(tk.Toplevel):
     """弹出窗口 — 用表格编辑多条伪造路由。"""
 
-    LSA_TYPE_NAMES = {"1": "Type-1 Router", "3": "Type-3 Summary", "5": "Type-5 External"}
-
     def __init__(self, parent, holder: RoutesHolder, lsa_type: str = "5"):
         super().__init__(parent)
-        type_name = self.LSA_TYPE_NAMES.get(lsa_type, f"Type-{lsa_type}")
-        self.title(f"编辑伪造路由条目 — {type_name}")
+        type_name = LSA_TYPE_NAMES.get(lsa_type, f"Type-{lsa_type}")
+        self.title(f"编辑伪造路由条目 — Type-{type_name}")
         self.geometry("640x380")
         self.resizable(True, True)
         self.transient(parent)
@@ -58,8 +58,8 @@ class RoutesEditor(tk.Toplevel):
 
     def _build_ui(self):
         # 类型标签
-        type_name = self.LSA_TYPE_NAMES.get(self._lsa_type, f"Type-{self._lsa_type}")
-        ttk.Label(self, text=f"LSA 类型: {type_name}",
+        type_name = LSA_TYPE_NAMES.get(self._lsa_type, f"Type-{self._lsa_type}")
+        ttk.Label(self, text=f"LSA 类型: Type-{type_name}",
                   font=FONT_LABEL).pack(anchor=tk.W, padx=10, pady=(8, 0))
 
         # 表格
@@ -112,8 +112,8 @@ class RoutesEditor(tk.Toplevel):
     def _on_delete(self):
         sel = self._tree.selection()
         if sel:
-            self._tree.delete(sel[0])
             idx = self._tree.index(sel[0])
+            self._tree.delete(sel[0])
             del self._routes[idx]
 
     def _on_save(self):
@@ -422,9 +422,8 @@ class ConfigForm(tk.Frame):
             adv = "1.1.1.1"
             if "advertising_router" in self._widgets:
                 adv = self._widgets["advertising_router"].get()
-            if not adv:
-                adv = self._widgets.get("router_id", type(None))
-                adv = adv.get() if adv and hasattr(adv, 'get') else "1.1.1.1"
+            if not adv and "router_id" in self._widgets:
+                adv = self._widgets["router_id"].get()
             lsid_var.set(adv)
             return
 
@@ -566,8 +565,6 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
     target = _get("target", "224.0.0.5")
     rid = _get("router_id", "1.1.1.1")
     aid = _get("area_id", "0.0.0.0")
-    mode = _get("mode", "passive")
-    sniff = _get("sniff_mode", "hub")
 
     # Try to get src IP
     src_ip = "(unknown)"
@@ -612,8 +609,7 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
         routes = _get("external_routes")
         n_routes = len(routes) if isinstance(routes, list) else 0
 
-        lsa_names = {"1": "Router", "3": "Summary", "5": "External"}
-        lsa_name = lsa_names.get(str(lsa_type), f"Type-{lsa_type}")
+        lsa_name = LSA_TYPE_NAMES.get(str(lsa_type), f"Type-{lsa_type}")
 
         lines.append("├── OSPF LSU ────────────────────────────┤")
         lines.append(f"│ LSA Count: {1 + n_routes:<26} │")
@@ -629,9 +625,8 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
             lines.append(f"│ Network Mask: {nmask:<22} │")
             lines.append(f"│ Metric: {metric:<28} │")
         if n_routes:
-            type_label = {"1": "Type-1 Router", "3": "Type-3 Summary",
-                          "5": "Type-5 External"}.get(str(lsa_type), f"Type-{lsa_type}")
-            lines.append(f"├── 伪造路由条目 ({type_label}) ────────────┤")
+            type_label = LSA_TYPE_NAMES.get(str(lsa_type), f"Type-{lsa_type}")
+            lines.append(f"├── 伪造路由条目 (Type-{type_label}) ────────┤")
             for i, r in enumerate(routes):
                 r_net = r.get("network", "-")
                 r_mask = r.get("mask", "255.255.255.0")

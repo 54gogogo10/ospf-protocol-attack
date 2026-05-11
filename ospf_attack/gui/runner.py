@@ -3,7 +3,6 @@
 import queue
 import threading
 import traceback
-from typing import Any
 
 from ..cli.commands import _ATTACK_REGISTRY
 from ..config.config import build_config

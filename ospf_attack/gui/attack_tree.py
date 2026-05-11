@@ -2,7 +2,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable, Optional
+from typing import Callable
 
 from .styles import BG_TREE
 
@@ -33,7 +33,7 @@ ATTACK_LABELS = {
 class AttackTree(tk.Frame):
     def __init__(self, parent, **kw):
         super().__init__(parent, bg=BG_TREE, **kw)
-        self.on_select: Optional[Callable[[str], None]] = None
+        self.on_select: Callable[[str], None] | None = None
 
         self.tree = ttk.Treeview(
             self, show="tree", selectmode="browse",
@@ -51,7 +51,7 @@ class AttackTree(tk.Frame):
 
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
-    def get_selected(self) -> Optional[str]:
+    def get_selected(self) -> str | None:
         sel = self.tree.selection()
         if not sel:
             return None
@@ -61,7 +61,7 @@ class AttackTree(tk.Frame):
                 return name
         return None
 
-    def _on_tree_select(self, event):
+    def _on_tree_select(self, _event):
         name = self.get_selected()
         if name and self.on_select:
             self.on_select(name)
