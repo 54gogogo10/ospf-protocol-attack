@@ -512,6 +512,15 @@ class ConfigForm(tk.Frame):
         fields = SPECIFIC_FIELDS.get(attack_name, [])
         for i, name in enumerate(fields):
             _build_field_row(self._specific_frame, name, i, self)
+        # 攻击专属默认值覆盖
+        _OVERRIDES = {
+            "max-seq": {"sequence_number": "0x7FFFFFFF"},
+            "max-age": {"age": "3600"},
+        }
+        for field_name, value in _OVERRIDES.get(attack_name, {}).items():
+            if field_name in self._widgets:
+                self._widgets[field_name].set(str(value))
+
         # 为 Link State ID 相关字段添加自动计算
         for trigger in ("lsa_type", "advertising_router"):
             if trigger in self._widgets:
