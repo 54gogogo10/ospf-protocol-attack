@@ -1,10 +1,26 @@
 """动态配置表单 — 根据攻击类型动态生成参数字段。"""
 
+import socket
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
 from .styles import FONT_LABEL, FONT_ENTRY, PAD_FORM, PAD_OUTER, SECTION_GAP
+
+
+def get_network_interfaces() -> list[str]:
+    """获取本机网卡列表，优先使用 socket.if_nameindex()。"""
+    try:
+        return [name for _, name in socket.if_nameindex()]
+    except Exception:
+        pass
+    # 降级：尝试 scapy
+    try:
+        from scapy.all import get_if_list
+        return get_if_list()
+    except Exception:
+        pass
+    return []
 
 
 # =====================================================================
@@ -13,7 +29,7 @@ from .styles import FONT_LABEL, FONT_ENTRY, PAD_FORM, PAD_OUTER, SECTION_GAP
 
 FIELD_META: dict[str, dict] = {
     # -- 通用参数 (AttackConfig) --
-    "iface":          {"widget": "entry",   "label": "网卡接口"},
+    "iface":          {"widget": "iface",   "label": "网卡接口"},
     "target":         {"widget": "entry",   "label": "目标地址"},
     "mode":           {"widget": "radio",   "label": "攻击模式", "choices": ["passive", "active"]},
     "sniff_mode":     {"widget": "radio",   "label": "嗅探模式", "choices": ["hub", "arp_spoof"]},
@@ -194,11 +210,11 @@ class ConfigForm(tk.Frame):
             if w is None:
                 continue
             try:
-                if hasattr(w, "delete"):
+                if hasattr(w, "set"):
+                    w.set(str(value))
+                elif hasattr(w, "delete"):
                     w.delete(0, tk.END)
                     w.insert(0, str(value))
-                elif hasattr(w, "set"):
-                    w.set(str(value))
             except Exception:
                 pass
 
@@ -269,7 +285,15 @@ def _build_field_row(parent: ttk.Frame, field_name: str, row: int, form: "Config
     lbl = ttk.Label(parent, text=label_text + ":", font=FONT_LABEL)
     lbl.grid(row=row, column=0, sticky=tk.W, padx=(0, 6), pady=PAD_FORM)
 
-    if wtype == "entry":
+    if wtype == "iface":
+        ifaces = get_network_interfaces()
+        var = tk.StringVar(value=ifaces[0] if ifaces else "")
+        w = ttk.Combobox(parent, textvariable=var, values=ifaces,
+                         font=FONT_ENTRY, width=30)
+        w.grid(row=row, column=1, sticky=tk.EW, pady=PAD_FORM)
+        form._widgets[field_name] = var
+
+    elif wtype == "entry":
         var = tk.StringVar()
         w = ttk.Entry(parent, textvariable=var, font=FONT_ENTRY, width=32)
         w.grid(row=row, column=1, sticky=tk.EW, pady=PAD_FORM)

@@ -99,7 +99,7 @@ def test_specific_fields_have_metadata():
 
 
 def test_get_widget_type_returns_entry_for_str():
-    assert get_widget_type("iface") == "entry"
+    assert get_widget_type("target") == "entry"
 
 
 def test_get_widget_type_returns_spinbox_for_int():
