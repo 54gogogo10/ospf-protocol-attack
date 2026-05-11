@@ -32,3 +32,42 @@ def test_log_panel_flush_updates_text():
     assert "line1" in content
     assert "line2" in content
     root.destroy()
+
+
+from ospf_attack.gui.attack_tree import AttackTree
+
+
+def test_attack_tree_populates_all_12_attacks():
+    root = tk.Tk()
+    tree = AttackTree(root)
+    tree.pack()
+    children = tree.tree.get_children()
+    assert len(children) == 4  # 4 category nodes
+    total_leaves = sum(
+        len(tree.tree.get_children(cat)) for cat in children
+    )
+    assert total_leaves == 12
+    root.destroy()
+
+
+def test_attack_tree_get_selected_returns_none_initially():
+    root = tk.Tk()
+    tree = AttackTree(root)
+    assert tree.get_selected() is None
+    root.destroy()
+
+
+def test_attack_tree_has_callback():
+    root = tk.Tk()
+    tree = AttackTree(root)
+    called = []
+    tree.on_select = lambda name: called.append(name)
+    for cat in tree.tree.get_children():
+        leaves = tree.tree.get_children(cat)
+        if leaves:
+            first_leaf = leaves[0]
+            tree.tree.selection_set(first_leaf)
+            tree.tree.event_generate("<<TreeviewSelect>>")
+            break
+    assert len(called) == 1
+    root.destroy()
