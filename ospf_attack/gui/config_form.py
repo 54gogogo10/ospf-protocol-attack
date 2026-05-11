@@ -9,15 +9,21 @@ from .styles import FONT_LABEL, FONT_ENTRY, PAD_FORM, PAD_OUTER, SECTION_GAP
 
 
 def get_network_interfaces() -> list[str]:
-    """获取本机网卡列表，优先使用 socket.if_nameindex()。"""
+    """获取本机网卡列表（可读名称）。Windows 用 Scapy/Npcap，Linux 用 socket。"""
+    # Windows: Scapy IFACES 提供 Npcap 可读名称
     try:
-        return [name for _, name in socket.if_nameindex()]
+        from scapy.all import IFACES
+        names = sorted(set(
+            d.description for d in IFACES.data.values()
+            if d.description
+        ))
+        if names:
+            return names
     except Exception:
         pass
-    # 降级：尝试 scapy
+    # Linux / fallback
     try:
-        from scapy.all import get_if_list
-        return get_if_list()
+        return [name for _, name in socket.if_nameindex()]
     except Exception:
         pass
     return []
