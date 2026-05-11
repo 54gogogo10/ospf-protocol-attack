@@ -12,7 +12,7 @@ from .styles import (
     LOG_MIN_HEIGHT, TREE_MIN_WIDTH,
 )
 from .attack_tree import AttackTree, ATTACK_LABELS
-from .config_form import ConfigForm
+from .config_form import ConfigForm, PacketPreview
 from .log_panel import LogPanel
 from .runner import AttackRunner
 
@@ -66,16 +66,23 @@ class MainWindow:
         self._attack_tree.on_select = self._on_attack_select
         paned.add(tree_frame, weight=0)
 
-        # 右侧: 表单 + 操作栏 + 日志
+        # 右侧: 表单 + 操作栏 + 日志 (左) | 报文预览 (右)
         right_frame = ttk.Frame(paned)
         paned.add(right_frame, weight=1)
 
-        # 表单 (可滚动)
-        self._form = ConfigForm(right_frame)
+        # 右侧内部左右分栏
+        right_paned = ttk.PanedWindow(right_frame, orient=tk.HORIZONTAL)
+        right_paned.pack(fill=tk.BOTH, expand=True)
+
+        # 左列: 表单 + 按钮 + 状态 + 日志
+        left_col = ttk.Frame(right_paned)
+        right_paned.add(left_col, weight=1)
+
+        self._form = ConfigForm(left_col)
         self._form.pack(fill=tk.BOTH, expand=True)
 
         # 操作按钮栏
-        btn_frame = ttk.Frame(right_frame)
+        btn_frame = ttk.Frame(left_col)
         btn_frame.pack(fill=tk.X, pady=(PAD_INNER, 0))
 
         self._start_btn = ttk.Button(btn_frame, text="▶ 启动攻击",
@@ -92,7 +99,7 @@ class MainWindow:
                    command=self._on_load_config).pack(side=tk.LEFT, padx=4)
 
         # 状态栏
-        status_frame = ttk.Frame(right_frame)
+        status_frame = ttk.Frame(left_col)
         status_frame.pack(fill=tk.X, pady=(PAD_INNER, 0))
 
         self._status_var = tk.StringVar(value="● 状态: 就绪")
@@ -104,14 +111,19 @@ class MainWindow:
                   font=FONT_STATUS).pack(side=tk.LEFT, padx=(20, 0))
 
         # 进度条
-        self._progress = ttk.Progressbar(right_frame, mode="indeterminate")
+        self._progress = ttk.Progressbar(left_col, mode="indeterminate")
         self._progress.pack(fill=tk.X, pady=(2, 0))
 
         # 日志面板
-        log_frame = ttk.Frame(right_frame, height=LOG_MIN_HEIGHT)
+        log_frame = ttk.Frame(left_col, height=LOG_MIN_HEIGHT)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(PAD_INNER, 0))
         self._log_panel = LogPanel(log_frame)
         self._log_panel.pack(fill=tk.BOTH, expand=True)
+
+        # 右列: 报文预览
+        self._preview = PacketPreview(right_paned,
+                                      lambda: self._form.format_preview())
+        right_paned.add(self._preview, weight=0)
 
         # -- 底部状态栏 --
         bottom_bar = ttk.Frame(self.root)
@@ -149,6 +161,7 @@ class MainWindow:
         self._current_attack = attack_name
         label = ATTACK_LABELS.get(attack_name, attack_name)
         self._form.set_attack(attack_name)
+        self._preview.refresh()
         self._log_queue.put(("SYSTEM", f"已选择攻击模块: {label} ({attack_name})"))
 
     def _on_start(self):

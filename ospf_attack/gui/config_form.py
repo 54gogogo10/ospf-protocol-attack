@@ -334,7 +334,9 @@ class ConfigForm(tk.Frame):
 
         self._specific_frame = ttk.LabelFrame(self._scroll_frame, text="攻击专属参数", padding=8)
 
-        self._preview = PacketPreview(self._scroll_frame, self)
+    def format_preview(self) -> str:
+        """返回当前参数对应的 OSPF 报文预览字符串，供外部预览面板使用。"""
+        return _format_ospf_preview(self)
 
     def set_attack(self, attack_name: str):
         """切换攻击类型，重建专属参数区。"""
@@ -358,11 +360,8 @@ class ConfigForm(tk.Frame):
         # 按顺序 pack
         self._common_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(PAD_OUTER, 0))
         self._specific_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(SECTION_GAP, 0))
-        self._preview.pack(fill=tk.BOTH, padx=PAD_OUTER, pady=(SECTION_GAP, 0))
         # ARP 面板根据 sniff_mode 决定显隐
         self._toggle_arp()
-        # 刷新报文预览
-        self._preview.refresh()
 
     def get_config_dict(self) -> dict:
         """收集所有表单参数。"""
@@ -577,15 +576,15 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
 class PacketPreview(ttk.LabelFrame):
     """报文预览面板 — 显示构造的 OSPF 报文结构。"""
 
-    def __init__(self, parent, form: "ConfigForm", **kw):
+    def __init__(self, parent, preview_fn, **kw):
         super().__init__(parent, text="报文预览", padding=6, **kw)
-        self._form = form
+        self._preview_fn = preview_fn
 
         bar = ttk.Frame(self)
         bar.pack(fill=tk.X, pady=(0, 4))
         ttk.Button(bar, text="刷新预览", command=self.refresh).pack(side=tk.RIGHT)
 
-        self._text = tk.Text(self, font=("Consolas", 9), width=42, height=18,
+        self._text = tk.Text(self, font=("Consolas", 9), width=42, height=24,
                              bg="#1e1e1e", fg="#d4d4d4",
                              insertbackground="#ffffff",
                              relief=tk.FLAT, state=tk.DISABLED,
@@ -596,7 +595,7 @@ class PacketPreview(ttk.LabelFrame):
 
     def refresh(self):
         try:
-            preview = _format_ospf_preview(self._form)
+            preview = self._preview_fn()
         except Exception:
             preview = "(报文预览不可用)"
         self._text.configure(state=tk.NORMAL)
