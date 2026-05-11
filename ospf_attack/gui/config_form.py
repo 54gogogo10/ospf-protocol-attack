@@ -37,15 +37,19 @@ class RoutesHolder:
 class RoutesEditor(tk.Toplevel):
     """弹出窗口 — 用表格编辑多条伪造路由。"""
 
-    def __init__(self, parent, holder: RoutesHolder):
+    LSA_TYPE_NAMES = {"1": "Type-1 Router", "3": "Type-3 Summary", "5": "Type-5 External"}
+
+    def __init__(self, parent, holder: RoutesHolder, lsa_type: str = "5"):
         super().__init__(parent)
-        self.title("编辑伪造路由条目")
-        self.geometry("640x360")
+        type_name = self.LSA_TYPE_NAMES.get(lsa_type, f"Type-{lsa_type}")
+        self.title(f"编辑伪造路由条目 — {type_name}")
+        self.geometry("640x380")
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
 
         self._holder = holder
+        self._lsa_type = lsa_type
         self._routes: list[dict] = [r.copy() for r in holder.routes]
 
         self._build_ui()
@@ -53,6 +57,11 @@ class RoutesEditor(tk.Toplevel):
         self.wait_window()
 
     def _build_ui(self):
+        # 类型标签
+        type_name = self.LSA_TYPE_NAMES.get(self._lsa_type, f"Type-{self._lsa_type}")
+        ttk.Label(self, text=f"LSA 类型: {type_name}",
+                  font=FONT_LABEL).pack(anchor=tk.W, padx=10, pady=(8, 0))
+
         # 表格
         headings = ("目标网段", "掩码", "Metric", "转发地址")
         self._tree = ttk.Treeview(self, columns=ROUTE_COLUMNS, show="headings",
@@ -449,8 +458,15 @@ def _update_routes_label(holder: RoutesHolder, var: tk.StringVar):
     var.set(f"{n} 条路由" if n else "未配置")
 
 
-def _open_routes_editor(parent: ttk.Frame, holder: RoutesHolder, count_var: tk.StringVar):
-    RoutesEditor(parent.winfo_toplevel(), holder)
+def _open_routes_editor(parent: ttk.Frame, holder: RoutesHolder, count_var: tk.StringVar,
+                        form: "ConfigForm"):
+    lsa_type = "5"
+    if form and form._widgets.get("lsa_type"):
+        try:
+            lsa_type = str(form._widgets["lsa_type"].get())
+        except Exception:
+            pass
+    RoutesEditor(parent.winfo_toplevel(), holder, lsa_type)
     _update_routes_label(holder, count_var)
 
 
@@ -539,7 +555,9 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
             lines.append(f"│ Network Mask: {nmask:<22} │")
             lines.append(f"│ Metric: {metric:<28} │")
         if n_routes:
-            lines.append("├── 伪造路由条目 ─────────────────────────┤")
+            type_label = {"1": "Type-1 Router", "3": "Type-3 Summary",
+                          "5": "Type-5 External"}.get(str(lsa_type), f"Type-{lsa_type}")
+            lines.append(f"├── 伪造路由条目 ({type_label}) ────────────┤")
             for i, r in enumerate(routes):
                 r_net = r.get("network", "-")
                 r_mask = r.get("mask", "255.255.255.0")
@@ -660,7 +678,7 @@ def _build_field_row(parent: ttk.Frame, field_name: str, row: int, form: "Config
         f = ttk.Frame(parent)
         f.grid(row=row, column=1, sticky=tk.EW, pady=PAD_FORM)
         ttk.Button(f, text="编辑路由...",
-                   command=lambda h=holder, cv=count_var: _open_routes_editor(parent, h, cv)
+                   command=lambda h=holder, cv=count_var, f=form: _open_routes_editor(parent, h, cv, f)
                    ).pack(side=tk.LEFT)
         ttk.Label(f, textvariable=count_var, font=FONT_LABEL,
                   foreground="gray").pack(side=tk.LEFT, padx=6)
