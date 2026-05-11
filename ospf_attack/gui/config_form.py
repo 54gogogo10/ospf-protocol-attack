@@ -394,6 +394,44 @@ class ConfigForm(tk.Frame):
         self._specific_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(SECTION_GAP, 0))
         # ARP 面板根据 sniff_mode 决定显隐
         self._toggle_arp()
+        # 自动计算 Link State ID
+        self._auto_fill_link_state_id()
+
+    def _auto_fill_link_state_id(self):
+        """根据 LSA 类型和伪造路由自动计算 Link State ID。"""
+        if "link_state_id" not in self._widgets:
+            return
+        lsid_var = self._widgets["link_state_id"]
+        # 如果用户已手动填写非空值则保留
+        current = lsid_var.get()
+        if current and current not in ("", "1.1.1.1", "0.0.0.0"):
+            return
+
+        # Type-1: LS ID = advertising router or router_id
+        lsa_type = "5"
+        if "lsa_type" in self._widgets:
+            lsa_type = self._widgets["lsa_type"].get()
+        if lsa_type == "1":
+            adv = "1.1.1.1"
+            if "advertising_router" in self._widgets:
+                adv = self._widgets["advertising_router"].get()
+            if not adv:
+                adv = self._widgets.get("router_id", type(None))
+                adv = adv.get() if adv and hasattr(adv, 'get') else "1.1.1.1"
+            lsid_var.set(adv)
+            return
+
+        # Type-3/5: LS ID = first route's network, or router_id
+        routes_holder = self._widgets.get("external_routes")
+        if isinstance(routes_holder, RoutesHolder) and routes_holder.routes:
+            lsid_var.set(routes_holder.routes[0].get("network", "0.0.0.0"))
+            return
+
+        # Fallback
+        rid = "1.1.1.1"
+        if "router_id" in self._widgets:
+            rid = self._widgets["router_id"].get()
+        lsid_var.set(rid)
 
     def get_config_dict(self) -> dict:
         """收集所有表单参数。"""
@@ -468,6 +506,11 @@ class ConfigForm(tk.Frame):
         fields = SPECIFIC_FIELDS.get(attack_name, [])
         for i, name in enumerate(fields):
             _build_field_row(self._specific_frame, name, i, self)
+        # 为 Link State ID 相关字段添加自动计算
+        for trigger in ("lsa_type", "advertising_router"):
+            if trigger in self._widgets:
+                self._widgets[trigger].trace_add(
+                    "write", lambda *_, t=trigger: self._auto_fill_link_state_id())
 
     def _toggle_arp(self):
         if self._sniff_var and self._sniff_var.get() == "arp_spoof":
@@ -491,6 +534,7 @@ def _open_routes_editor(parent: ttk.Frame, holder: RoutesHolder, count_var: tk.S
             pass
     RoutesEditor(parent.winfo_toplevel(), holder, lsa_type)
     _update_routes_label(holder, count_var)
+    form._auto_fill_link_state_id()
 
 
 # ---------------------------------------------------------------------------
