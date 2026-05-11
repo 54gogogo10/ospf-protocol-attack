@@ -242,10 +242,10 @@ FIELD_META: dict[str, dict] = {
     "subnet_mask":          {"widget": "entry",   "label": "子网掩码", "default": "255.255.255.0"},
 
     # -- LSAConfig 专属 --
-    "lsa_type":            {"widget": "combo",   "label": "LSA 类型", "choices": ["1", "3", "5"], "default": "5"},
+    "lsa_type":            {"widget": "combo",   "label": "LSA 类型", "choices": ["1", "3", "5"], "default": "5", "type": int},
     "link_state_id":       {"widget": "entry",   "label": "Link State ID"},
     "advertising_router":  {"widget": "entry",   "label": "通告路由器"},
-    "sequence_number":     {"widget": "entry",   "label": "序列号 (hex)", "default": "0x80000001"},
+    "sequence_number":     {"widget": "entry",   "label": "序列号 (hex)", "default": "0x80000001", "type": int},
     "age":                 {"widget": "spinbox", "label": "Age (秒)", "from_": 0, "to": 3600, "default": 0},
     "metric":              {"widget": "spinbox", "label": "Metric", "from_": 0, "to": 16777215, "default": 20},
     "network_mask":        {"widget": "entry",   "label": "网络掩码", "default": "255.255.255.0"},
@@ -323,6 +323,7 @@ def build_config_dict(widgets: dict, meta: dict[str, dict]) -> dict[str, Any]:
             continue
         m = meta.get(name, {})
         wtype = m.get("widget", "entry")
+        target_type = m.get("type", None)
         if wtype == "routes":
             result[name] = w.get()
         elif wtype == "spinbox":
@@ -332,6 +333,12 @@ def build_config_dict(widgets: dict, meta: dict[str, dict]) -> dict[str, Any]:
                 result[name] = raw
         elif wtype == "check":
             result[name] = bool(raw)
+        elif target_type is int:
+            # hex string like "0x80000001" or decimal string like "5"
+            try:
+                result[name] = int(str(raw), 0)
+            except ValueError:
+                result[name] = str(raw)
         else:
             result[name] = str(raw)
     return result
