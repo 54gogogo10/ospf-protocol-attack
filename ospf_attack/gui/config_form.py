@@ -355,8 +355,9 @@ class ConfigForm(tk.Frame):
 
         # 按顺序 pack
         self._common_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(PAD_OUTER, 0))
-        self._arp_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(SECTION_GAP, 0))
         self._specific_frame.pack(fill=tk.X, padx=PAD_OUTER, pady=(SECTION_GAP, 0))
+        # ARP 面板根据 sniff_mode 决定显隐
+        self._toggle_arp()
 
     def get_config_dict(self) -> dict:
         """收集所有表单参数。"""
@@ -426,7 +427,6 @@ class ConfigForm(tk.Frame):
         _build_field_row(self._arp_frame, "arp_target_a", 0, self)
         _build_field_row(self._arp_frame, "arp_target_b", 1, self)
         _build_field_row(self._arp_frame, "arp_interval", 2, self)
-        self._toggle_arp()
 
     def _build_specific(self, attack_name: str):
         fields = SPECIFIC_FIELDS.get(attack_name, [])
