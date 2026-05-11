@@ -12,7 +12,7 @@ from .styles import FONT_LABEL, FONT_ENTRY, PAD_FORM, PAD_OUTER, SECTION_GAP
 # 路由条目编辑器 — 用于 LSA 攻击配置多条伪造路由
 # ---------------------------------------------------------------------------
 
-ROUTE_COLUMNS = ("network", "mask", "metric", "forward")
+ROUTE_COLUMNS = ("network", "mask", "metric", "etype", "forward")
 
 
 class RoutesHolder:
@@ -63,12 +63,13 @@ class RoutesEditor(tk.Toplevel):
                   font=FONT_LABEL).pack(anchor=tk.W, padx=10, pady=(8, 0))
 
         # 表格
-        headings = ("目标网段", "掩码", "Metric", "转发地址")
+        headings = ("目标网段", "掩码", "Metric", "类型", "转发地址")
+        widths = {"network": 130, "mask": 130, "metric": 60, "etype": 50, "forward": 130}
         self._tree = ttk.Treeview(self, columns=ROUTE_COLUMNS, show="headings",
                                   selectmode="browse", height=10)
         for col, heading in zip(ROUTE_COLUMNS, headings):
             self._tree.heading(col, text=heading)
-            self._tree.column(col, width=120, anchor="center")
+            self._tree.column(col, width=widths.get(col, 100), anchor="center")
         self._tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 0))
 
         # 按钮栏
@@ -88,6 +89,7 @@ class RoutesEditor(tk.Toplevel):
                 r.get("network", ""),
                 r.get("mask", "255.255.255.0"),
                 r.get("metric", 20),
+                r.get("etype", "E2"),
                 r.get("forward", "0.0.0.0"),
             ))
 
@@ -131,25 +133,45 @@ class _RouteDialog(tk.Toplevel):
         self.result: dict | None = None
 
         r = existing or {"network": "192.168.100.0", "mask": "255.255.255.0",
-                         "metric": 20, "forward": "0.0.0.0"}
+                         "metric": 20, "etype": "E2", "forward": "0.0.0.0"}
 
-        fields = [
-            ("目标网段:", "network", str(r["network"])),
-            ("掩码:", "mask", str(r["mask"])),
-            ("Metric:", "metric", str(r["metric"])),
-            ("转发地址:", "forward", str(r["forward"])),
-        ]
         self._vars: dict[str, tk.StringVar] = {}
-        for i, (label, key, val) in enumerate(fields):
+        row = 0
+
+        for label, key, val in [
+            ("目标网段:", "network", str(r.get("network", ""))),
+            ("掩码:", "mask", str(r.get("mask", "255.255.255.0"))),
+            ("Metric:", "metric", str(r.get("metric", 20))),
+        ]:
             ttk.Label(self, text=label, font=FONT_LABEL).grid(
-                row=i, column=0, sticky=tk.W, padx=10, pady=4)
+                row=row, column=0, sticky=tk.W, padx=10, pady=4)
             var = tk.StringVar(value=val)
             ttk.Entry(self, textvariable=var, font=FONT_ENTRY, width=24).grid(
-                row=i, column=1, sticky=tk.EW, padx=10, pady=4)
+                row=row, column=1, sticky=tk.EW, padx=10, pady=4)
             self._vars[key] = var
+            row += 1
+
+        # E type combobox
+        ttk.Label(self, text="Metric 类型:", font=FONT_LABEL).grid(
+            row=row, column=0, sticky=tk.W, padx=10, pady=4)
+        etype_var = tk.StringVar(value=r.get("etype", "E2"))
+        ttk.Combobox(self, textvariable=etype_var, values=["E1", "E2"],
+                     font=FONT_ENTRY, width=22, state="readonly").grid(
+            row=row, column=1, sticky=tk.EW, padx=10, pady=4)
+        self._vars["etype"] = etype_var
+        row += 1
+
+        # Forwarding address
+        ttk.Label(self, text="转发地址:", font=FONT_LABEL).grid(
+            row=row, column=0, sticky=tk.W, padx=10, pady=4)
+        var = tk.StringVar(value=str(r.get("forward", "0.0.0.0")))
+        ttk.Entry(self, textvariable=var, font=FONT_ENTRY, width=24).grid(
+            row=row, column=1, sticky=tk.EW, padx=10, pady=4)
+        self._vars["forward"] = var
+        row += 1
 
         bar = ttk.Frame(self)
-        bar.grid(row=len(fields), column=0, columnspan=2, pady=10)
+        bar.grid(row=row, column=0, columnspan=2, pady=10)
         ttk.Button(bar, text="确定", command=self._on_ok).pack(side=tk.LEFT, padx=4)
         ttk.Button(bar, text="取消", command=self.destroy).pack(side=tk.LEFT, padx=4)
 
@@ -161,6 +183,7 @@ class _RouteDialog(tk.Toplevel):
                 "network": self._vars["network"].get(),
                 "mask": self._vars["mask"].get(),
                 "metric": int(self._vars["metric"].get()),
+                "etype": self._vars["etype"].get(),
                 "forward": self._vars["forward"].get(),
             }
         except ValueError:
@@ -562,8 +585,9 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
                 r_net = r.get("network", "-")
                 r_mask = r.get("mask", "255.255.255.0")
                 r_metric = r.get("metric", 20)
+                r_etype = r.get("etype", "E2")
                 r_fwd = r.get("forward", "0.0.0.0")
-                lines.append(f"│ #{i + 1} {r_net}/{r_mask}")
+                lines.append(f"│ #{i + 1} {r_net}/{r_mask}  [{r_etype}]")
                 lines.append(f"│    Metric: {r_metric}  Fwd: {r_fwd}")
 
     elif attack in ("flood", "spf-recalc", "db-overflow"):
