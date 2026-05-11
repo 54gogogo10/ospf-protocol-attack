@@ -54,10 +54,10 @@ class RoutesEditor(tk.Toplevel):
 
     def _build_ui(self):
         # 表格
-        cols = ("目标网段", "掩码", "Metric", "转发地址")
-        self._tree = ttk.Treeview(self, columns=cols, show="headings",
+        headings = ("目标网段", "掩码", "Metric", "转发地址")
+        self._tree = ttk.Treeview(self, columns=ROUTE_COLUMNS, show="headings",
                                   selectmode="browse", height=10)
-        for col, heading in zip(ROUTE_COLUMNS, cols):
+        for col, heading in zip(ROUTE_COLUMNS, headings):
             self._tree.heading(col, text=heading)
             self._tree.column(col, width=120, anchor="center")
         self._tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 0))
