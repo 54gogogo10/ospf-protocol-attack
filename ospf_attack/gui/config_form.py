@@ -493,12 +493,13 @@ def _build_field_row(parent: ttk.Frame, field_name: str, row: int, form: "Config
     elif wtype == "routes":
         holder = RoutesHolder()
         count_var = tk.StringVar(value="未配置")
-        btn = ttk.Button(parent, text="编辑路由...",
-                         command=lambda h=holder, cv=count_var: _open_routes_editor(parent, h, cv))
-        btn.grid(row=row, column=1, sticky=tk.W, pady=PAD_FORM)
-        lbl = ttk.Label(parent, textvariable=count_var, font=FONT_LABEL,
-                        foreground="gray")
-        lbl.grid(row=row, column=2, sticky=tk.W, pady=PAD_FORM, padx=(6, 0))
+        f = ttk.Frame(parent)
+        f.grid(row=row, column=1, sticky=tk.EW, pady=PAD_FORM)
+        ttk.Button(f, text="编辑路由...",
+                   command=lambda h=holder, cv=count_var: _open_routes_editor(parent, h, cv)
+                   ).pack(side=tk.LEFT)
+        ttk.Label(f, textvariable=count_var, font=FONT_LABEL,
+                  foreground="gray").pack(side=tk.LEFT, padx=6)
         form._widgets[field_name] = holder
         form._widgets[f"_{field_name}_label"] = count_var
 
