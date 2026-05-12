@@ -61,7 +61,7 @@ class TestAttackConfig:
             router_id="2.2.2.2", area_id="0.0.0.1",
             sniff_duration=60, packet_rate=100, max_packets=500,
             arp_target_a="10.0.0.1", arp_target_b="10.0.0.2", arp_interval=5,
-            verbose=True, pcap_output="out.pcap",
+            verbose=True,
         )
         assert c.mode == AttackMode.ACTIVE
         assert c.sniff_mode == SniffMode.ARP_SPOOF
@@ -69,7 +69,6 @@ class TestAttackConfig:
         assert c.arp_target_b == "10.0.0.2"
         assert c.arp_interval == 5
         assert c.verbose is True
-        assert c.pcap_output == "out.pcap"
 
 
 class TestHelloInjectionConfig:
