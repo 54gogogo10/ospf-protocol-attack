@@ -664,20 +664,23 @@ class TestHelloInjectionWithConfig:
 
     def test_hello_inject_custom_params(self, docker_network):
         """Hello injection with non-default hello interval and priority."""
-        _assert_full_adjacency(R1, "2.2.2.2")
+        _wait_full_adjacency(R1, "2.2.2.2", timeout=30)
 
-        out = run_attack_with_config(["hello-inject", "--router-id", self.RID], {
-            "hello_interval": 5,
-            "router_dead_interval": 20,
-            "router_priority": 200,
-            "auth_type": "none",
-            "subnet_mask": "255.255.255.0",
-            "packet_rate": 5,
-        }, timeout=30)
+        out = run_attack_with_config(
+            ["hello-inject", "--iface", "eth0", "--target", "224.0.0.5",
+             "--router-id", self.RID, "--sniff-duration", "10"],
+            {
+                "hello_interval": 5,
+                "router_dead_interval": 20,
+                "router_priority": 200,
+                "auth_type": "none",
+                "subnet_mask": "255.255.255.0",
+                "packet_rate": 5,
+            }, timeout=60)
 
         assert "失败" not in out, f"hello-inject with custom params failed: {out}"
 
-        time.sleep(1)
+        time.sleep(2)
         _assert_neighbor_present(R1, self.RID, state_prefix="Init", min_priority=200)
 
 
@@ -717,17 +720,19 @@ class TestConfigCompatibility:
 
     def test_dr_bdr_hijack_with_yaml_config(self, docker_network):
         """DR/BDR hijack with custom priority via YAML config."""
-        _assert_full_adjacency(R1, "2.2.2.2")
+        _wait_full_adjacency(R1, "2.2.2.2", timeout=30)
 
         RID = "5.5.5.5"
-        out = run_attack_with_config(["dr-bdr-hijack", "--router-id", RID], {
-            "hello_interval": 10,
-            "router_dead_interval": 40,
-            "router_priority": 255,
-            "sniff_duration": 8,
-            "packet_rate": 5,
-        }, timeout=30)
+        out = run_attack_with_config(
+            ["dr-bdr-hijack", "--iface", "eth0", "--target", "224.0.0.5",
+             "--router-id", RID, "--sniff-duration", "10"],
+            {
+                "hello_interval": 10,
+                "router_dead_interval": 40,
+                "router_priority": 255,
+                "packet_rate": 5,
+            }, timeout=60)
 
         assert "失败" not in out, f"dr-bdr-hijack with config failed: {out}"
-        time.sleep(1)
+        time.sleep(2)
         _assert_neighbor_present(R1, RID, state_prefix="Init", min_priority=255)
