@@ -244,12 +244,13 @@ class MainWindow:
 
     def _on_sniff(self):
         """嗅探网络中的 OSPF 报文并弹出浏览器。"""
-        iface = self._form.get_config_dict().get("iface", "eth0")
-        sniff_dur = self._form.get_config_dict().get("sniff_duration", 10)
+        cfg = self._form.get_config_dict()
+        iface = str(cfg.get("iface", "eth0"))
+        sniff_dur = int(cfg.get("sniff_duration", 10))
         self._log_queue.put(("SYSTEM", f"开始在 {iface} 嗅探 OSPF 报文 ({sniff_dur}s)..."))
         self.root.config(cursor="watch")
         self.root.update()
-        packets = sniff_ospf(str(iface), int(sniff_dur))
+        packets = sniff_ospf(iface, sniff_dur)
         self.root.config(cursor="")
         if packets:
             self._log_queue.put(("INFO", f"嗅探完成，捕获 {len(packets)} 个 OSPF 报文"))

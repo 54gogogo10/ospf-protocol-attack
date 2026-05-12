@@ -3,7 +3,7 @@
 import json
 import socket
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox
 from typing import Any
 
 from .styles import FONT_LABEL, FONT_ENTRY, PAD_FORM, PAD_OUTER, SECTION_GAP
@@ -438,7 +438,6 @@ class ConfigForm(tk.Frame):
 
     def export_pcap(self) -> bool:
         """将当前构造的报文导出为 pcap 文件，返回是否成功。"""
-        from tkinter import filedialog, messagebox
         from scapy.utils import wrpcap
 
         path = filedialog.asksaveasfilename(

@@ -1,10 +1,9 @@
 """报文嗅探捕获 / pcap 导入 / 报文浏览器。"""
 
-import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from .styles import FONT_LABEL, FONT_ENTRY
+from .styles import FONT_LABEL
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +196,6 @@ def read_pcap(path: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 报文浏览器弹窗
 # ---------------------------------------------------------------------------
-
-PACKET_COLUMNS = ("type", "src", "dst", "summary")
 
 
 class PacketBrowser(tk.Toplevel):
