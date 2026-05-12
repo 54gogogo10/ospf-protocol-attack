@@ -124,7 +124,8 @@ class MainWindow:
 
         # 右列: 报文预览
         self._preview = PacketPreview(right_paned,
-                                      lambda: self._form.format_preview())
+                                      lambda: self._form.format_preview(),
+                                      export_fn=lambda: self._form.export_pcap())
         right_paned.add(self._preview, weight=0)
 
         # -- 底部状态栏 --
