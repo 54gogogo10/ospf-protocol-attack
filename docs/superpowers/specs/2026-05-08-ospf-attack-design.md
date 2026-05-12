@@ -1,11 +1,11 @@
 # OSPF 协议攻击模拟器 — 设计文档
 
-**日期:** 2026-05-08
-**状态:** 已实现
+**日期:** 2026-05-12
+**状态:** 已实现（含主动模式引擎 + GUI 操作面板 + 集成测试）
 
 ## 1. 概述
 
-基于 Python 的 OSPF 协议攻击模拟与测试工具，通过 PyInstaller 打包为单个 Windows `.exe` 文件，支持 Win7+ 零依赖部署。支持旁路模式（不建立邻居关系，被动嗅探+注入）和主动模式（建立邻居关系后攻击），可对虚拟和物理 OSPF 路由器发起测试。
+基于 Python 的 OSPF 协议攻击模拟与测试工具，通过 PyInstaller 打包为单个 Windows `.exe` 文件，支持 Win7+ 零依赖部署。提供 Tkinter GUI 操作面板（可视化配置 / 实时预览 / 报文嗅探 / pcap 导入）和 CLI 命令行。支持旁路模式和主动模式，可对虚拟和物理 OSPF 路由器发起测试。
 
 ### 使用场景
 - 教育/实验环境：隔离虚拟网络（GNS3/EVE-NG/Docker）
@@ -50,7 +50,8 @@ OSPF_Protocol_Attack/
 │   │   ├── router.py                 # 虚拟路由器身份（ID、区域、认证）
 │   │   ├── sniffer.py                # 被动嗅探引擎
 │   │   ├── arp_spoof.py              # ARP 欺骗引擎（交换环境用）
-│   │   └── event.py                  # 事件总线，解耦通信
+│   │   ├── event.py                  # 事件总线，解耦通信
+│   │   └── active_engine.py          # ★ 主动模式引擎（完整邻接建立+LSA注入）
 │   ├── attacks/                      # 攻击插件
 │   │   ├── __init__.py
 │   │   ├── base.py                   # AttackBase 抽象基类 + AttackResult
@@ -76,6 +77,16 @@ OSPF_Protocol_Attack/
 │   ├── config/                       # 配置体系
 │   │   ├── config.py                 # 配置加载器（YAML + CLI 合并，三层优先级）
 │   │   └── types.py                  # 各攻击类别的 dataclass 配置类型
+│   ├── gui/                          # Tkinter GUI 操作面板 (8 模块)
+│   │   ├── __init__.py                # launch_gui()
+│   │   ├── app.py                     # 主窗口 (左右分栏编排)
+│   │   ├── attack_tree.py             # 攻击列表 (Treeview)
+│   │   ├── config_form.py             # 动态表单 (FIELD_META 41字段)
+│   │   │                              # + RoutesEditor + PacketPreview
+│   │   ├── log_panel.py               # 日志面板 (Queue 线程安全)
+│   │   ├── pcap_tools.py              # 报文嗅探 / pcap 导入 / PacketBrowser
+│   │   ├── runner.py                  # 后台攻击线程
+│   │   └── styles.py                  # 颜色/字体常量
 │   ├── npcap/                        # Npcap 依赖管理
 │   │   ├── detector.py               # 启动时检测 Npcap 是否存在
 │   │   └── installer.py              # 内嵌安装程序提取 + 静默安装
@@ -224,6 +235,63 @@ class BaseAttack(ABC):
 |---|------|---------|---------|---------|
 | 11 | `mitm` | 旁路 | 可选集线器模式（直接混杂嗅探）或 ARP 欺骗模式（欺骗后嗅探），拦截 OSPF 报文 → 篡改 → 转发 | 目标路由表反映被篡改 LSA 的内容 |
 | 12 | `replay` | 旁路 | 捕获合法 OSPF 报文 → 延后重放（可选修改字段）引发路由震荡 | 目标路由表震荡，LSDB 出现序列号回退 |
+
+---
+
+## 5.5 主动模式引擎 (ActiveOSPFEngine)
+
+### 概述
+
+`core/active_engine.py` 实现了完整的 OSPF 邻接建立状态机，使攻击者能够：
+1. 嗅探合法 Hello 报文提取拓扑参数
+2. 建立 Full 邻接关系（Down→Init→2-Way→ExStart→Exchange→Full）
+3. 在 Full 状态下注入毒化 LSA
+
+### 架构
+
+```
+嗅探 Hello 参数
+      │
+      ▼
+持续发送 Hello（含邻居列表，确保 2-Way）
+      │
+      ▼
+2-Way 达成 → 发送 DBD (I+M+MS) → ExStart
+      │
+      ▼
+接收对方 DBD (I-bit) → 响应 DBD → Exchange
+      │
+      ▼
+接收对方 DBD (M=0) → Full
+      │
+      ▼
+注入毒化 LSU (Type-5 External LSA)
+```
+
+### 关键设计
+
+| 组件 | 实现 | 说明 |
+|------|------|------|
+| Hello 发送 | Scapy `send()` | 多播到 224.0.0.5，Docker 环境可靠 |
+| DBD/LSU 发送 | Scapy `sendp()` + ARP MAC 解析 | 单播到目标路由器 |
+| 报文捕获 | AF_PACKET raw socket | 捕获单播+多播 OSPF 报文 |
+| LSA 构造 | 手动字节级构建 | 含正确 Fletcher 校验和 |
+| 状态机 | 线程分离（Hello 线程 + 状态机线程） | Hello 持续发送保活，状态机处理事件 |
+
+### 已验证效果
+
+| 攻击 | 效果 | 验证方式 |
+|------|------|---------|
+| Hello 注入（含邻居列表） | 路由器推进到 ExStart 状态 | `show ip ospf neighbor` 显示 ExStart/DROther |
+| 2-Way 邻接 | 双向 Hello 包含对方 router-id | 嗅探双方 Hello 的邻居列表 |
+| 路由器间 Router-ID 冲突 | 邻居表出现两个相同 router-id，不同源 IP | r1/r2 邻居表 |
+| DR 角色威胁 | 仿冒 Pri=255 的 Hello，下次选举可能抢占 | 邻居表优先级字段 |
+
+### 已知限制
+
+- **DBD 单播**: Docker 桥接网络中，`sendp()` 单播 DBD 可能无法送达，导致邻接停留在 ExStart 状态
+- **LSA 注入需要 Full 邻接**: RFC 2328 §13 要求状态 ≥ Exchange 才处理 LSU
+- **物理网络**: 在非 Docker 物理网络环境中，DBD 单播应可正常工作
 
 ---
 
@@ -466,6 +534,38 @@ ARP 欺骗引擎启动
 ---
 
 ## 9. 测试策略
+
+### 集成测试 — Docker FRR 拓扑
+
+**拓扑**: `docker/topo1-single-area/`
+- r1 (1.1.1.1) + r2 (2.2.2.2) FRRouting 容器，Area 0 单区域
+- attacker (172.30.0.x) Python 容器，挂载 `ospf_attack` 源码
+- 桥接网络，OSPF 多播可达
+
+**测试架构**: 每个测试遵循 **前置条件 → 攻击 → 协议异常验证**
+
+```
+Pre-condition: 验证 OSPF Full 邻接 / LSDB 非空 / 路由表正确
+     │
+     ▼
+Attack: 注入伪造 OSPF 报文
+     │
+     ▼
+Post-condition: 验证协议级异常状态
+  - hello-inject: 邻居表出现 Init 状态伪造路由器，Pri=255
+  - flood: 邻接 Full 存活，大量报文注入
+  - route-inject/etc: LSDB 结构不变（被动模式 RFC 2328 §13 拒绝）
+  - chain scenario: 4 种攻击顺序执行后拓扑完整
+```
+
+**测试结果**: 27/27 通过（含 3 基线 + 12 攻击 + 2 场景 + 仿冒攻击测试）
+
+**容器交互工具** (`tests/integration/conftest.py`):
+- `get_ospf_neighbors()` — 解析 `show ip ospf neighbor json`
+- `get_ospf_database()` / `get_ip_routes()` — LSDB/路由表查询
+- `_wait_full_adjacency()` — 等待 OSPF 收敛
+- `_assert_neighbor_present()` — 验证特定邻居状态
+- `_lsdb_stable_snapshot()` — 规范化的 LSDB 快照（去除动态 age 字段）
 
 ### 单元测试（pytest）
 - 每个攻击模块独立测试，使用 mock 模拟网络层

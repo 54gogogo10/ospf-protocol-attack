@@ -1,25 +1,35 @@
 # OSPF Protocol Attack Simulator
 
-OSPF 协议攻击模拟与测试工具，Python 库 + CLI 双层架构，通过 PyInstaller 打包为单个 `.exe`，支持 Win7+ 零依赖部署。
+OSPF 协议攻击模拟与测试工具，Python 库 + GUI + CLI 三层架构，通过 PyInstaller 打包为单个 `.exe`，支持 Win7+ 零依赖部署。
 
 ## 特性
 
 - **12 种攻击类型** — 覆盖邻接关系、LSA、DoS、协议级操控 4 大类
+- **GUI 操作面板** — Tkinter 可视化配置，实时报文预览，嗅探/导入 pcap 自动填充参数
+- **主动模式引擎** — 嗅探合法参数 → 建立 OSPF 邻接 → 注入毒化 LSA
+- **被动嗅探式攻击** — 实时捕获 Hello 报文提取拓扑参数，精确模仿合法路由器
 - **双嗅探模式** — 集线器环境混杂嗅探 / 交换环境 ARP 欺骗
 - **旁路攻击** — 所有攻击均支持不建立邻居关系的旁路注入
 - **三层配置** — 默认值 → YAML 配置文件 → CLI 参数，后者覆盖前者
 - **自包含部署** — PyInstaller 打包为单 exe，内嵌 Npcap 自动检测安装
+- **集成测试** — Docker FRRouting 拓扑 + 27 协议状态验证测试
 
 ## 快速开始
 
 ```bash
 pip install -e ".[dev]"
 ospf-attack --help
+
+# 启动 GUI 操作面板
+python -m ospf_attack
 ```
 
 ### 基础用法
 
 ```bash
+# GUI 操作面板 (可视化配置所有参数)
+python -m ospf_attack
+
 # 集线器模式 Hello 注入
 ospf-attack hello-inject --iface eth0 --target 192.168.1.0/24 --passive
 
@@ -116,22 +126,36 @@ verbose: true
 ```
 ospf_attack/
 ├── core/           # 核心引擎
-│   ├── packet.py      OSPF 报文构造/解析 (Scapy)
-│   ├── neighbor.py    邻居状态机 (Down→Full)
-│   ├── lsa_db.py      LSDB 模拟 (RFC 2328)
-│   ├── sniffer.py     被动嗅探引擎 (pcap-ct + Npcap)
-│   └── arp_spoof.py   ARP 欺骗引擎 (自动 MAC 学习 + 恢复)
+│   ├── packet.py       OSPF 报文构造/解析 (Scapy, LSA body 字节级构建)
+│   ├── neighbor.py     邻居状态机 (Down↔Init↔2-Way↔ExStart↔Exchange↔Full)
+│   ├── lsa_db.py       LSDB 模拟 (RFC 2328 signed 32-bit seq compare)
+│   ├── sniffer.py      被动嗅探引擎 (pcap-ct + Npcap)
+│   ├── arp_spoof.py    ARP 欺骗引擎 (自动 MAC 学习 + 恢复)
+│   └── active_engine.py ★ 主动模式引擎 (嗅探→邻接建立→LSA注入)
 ├── attacks/        # 攻击插件
-│   ├── base.py        AttackBase 抽象基类 (4 阶段生命周期)
-│   ├── adjacency/     邻接关系攻击 (3)
-│   ├── lsa/           LSA 攻击 (4)
-│   ├── dos/           拒绝服务攻击 (3)
-│   └── protocol/      协议级操控 (2)
-├── network/        # 网络层 (Scapy + Raw Socket)
-├── config/         # 配置体系 (默认值→YAML→CLI)
-├── cli/            # Click CLI (12 子命令)
-├── npcap/          # Npcap 检测 + 静默安装
-└── utils/          # 校验 + 日志
+│   ├── base.py         AttackBase 抽象基类 (4 阶段生命周期 + needs_repeated)
+│   ├── adjacency/      邻接关系攻击 (hello-inject, adjacency-break, dr-bdr-hijack)
+│   ├── lsa/            LSA 攻击 (route-inject, max-seq, max-age, fight-back)
+│   ├── dos/            拒绝服务 (flood, spf-recalc, db-overflow)
+│   └── protocol/       协议级操控 (mitm, replay)
+├── gui/            # Tkinter GUI 操作面板
+│   ├── app.py          主窗口 (左右分栏)
+│   ├── attack_tree.py  攻击列表 (Treeview, 4 类 12 攻击)
+│   ├── config_form.py  动态表单 (FIELD_META, RoutesEditor, 报文预览)
+│   ├── log_panel.py    日志面板 (Queue 线程安全, 彩色输出)
+│   ├── pcap_tools.py   报文嗅探 / pcap 导入 / PacketBrowser 自动填充
+│   ├── runner.py       后台攻击线程 (Event 停止)
+│   └── styles.py       颜色/字体/间距常量
+├── network/        # 网络层 (Scapy send + Raw Socket + AF_PACKET sniff)
+├── config/         # 配置体系 (AttackConfig → HelloInjectionConfig → ...)
+├── cli/            # Click CLI (12 子命令, 通用参数 + --config YAML)
+├── npcap/          # Npcap 检测 + 安装程序提取
+└── utils/          # validators + logging
+tests/
+├── unit/           # 73 单元测试
+└── integration/    # 27 集成测试 (Docker FRR)
+    ├── conftest.py     FRR 容器交互工具 (vtysh JSON 解析, 邻接等待)
+    └── test_topology_attacks.py  协议状态验证
 ```
 
 ## 构建 exe
@@ -146,11 +170,16 @@ ospf_attack/
 ## 测试
 
 ```bash
-# 单元测试
-pytest tests/unit/ -v    # 73 tests
+# 单元测试 (89 tests)
+pytest tests/unit/ -v
 
-# 开发模式安装
-pip install -e ".[dev]"
+# 集成测试 — 需要 Docker Desktop + FRRouting
+# 启动拓扑 → 运行测试
+docker compose -f docker/topo1-single-area/docker-compose.yml up -d
+pytest tests/integration/ -v    # 27 tests
+docker compose -f docker/topo1-single-area/docker-compose.yml down -v
+
+# 全部测试: 116 tests, 100% pass rate
 ```
 
 ## 技术栈
@@ -158,12 +187,14 @@ pip install -e ".[dev]"
 | 层 | 技术 |
 |---|------|
 | 语言 | Python 3.10+ |
-| 协议引擎 | Scapy (`scapy.contrib.ospf`) |
-| 报文捕获 | pcap-ct + Npcap |
-| CLI | Click |
+| 协议引擎 | Scapy (`scapy.contrib.ospf`) + 手动字节级 LSA 构建 |
+| 报文捕获 | pcap-ct + Npcap (Windows) / AF_PACKET raw socket (Linux/Docker) |
+| CLI | Click (12 子命令) |
+| GUI | Tkinter + ttk (零额外依赖) |
 | 打包 | PyInstaller `--onefile` |
-| 测试 | pytest |
-| 配置 | YAML |
+| 测试 | pytest (116 tests: 89 unit + 27 integration) |
+| 配置 | YAML (三层优先级: 默认→YAML文件→CLI参数) |
+| 集成拓扑 | Docker + FRRouting (FRR) 容器 |
 
 ## 许可证
 
