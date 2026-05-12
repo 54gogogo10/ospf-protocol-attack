@@ -16,6 +16,7 @@ from .styles import (
 from .attack_tree import AttackTree, ATTACK_LABELS
 from .config_form import ConfigForm, PacketPreview
 from .log_panel import LogPanel
+from .pcap_tools import sniff_ospf, read_pcap, PacketBrowser
 from .runner import AttackRunner
 
 
@@ -99,6 +100,11 @@ class MainWindow:
                    command=self._on_save_config).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_frame, text="加载配置",
                    command=self._on_load_config).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        ttk.Button(btn_frame, text="嗅探报文",
+                   command=self._on_sniff).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="导入 pcap",
+                   command=self._on_import_pcap).pack(side=tk.LEFT, padx=4)
 
         # 状态栏
         status_frame = ttk.Frame(left_col)
@@ -235,6 +241,40 @@ class MainWindow:
             self._current_attack = attack_name
         self._form.set_config_dict(data)
         self._log_queue.put(("INFO", f"配置已加载: {path}"))
+
+    def _on_sniff(self):
+        """嗅探网络中的 OSPF 报文并弹出浏览器。"""
+        iface = self._form.get_config_dict().get("iface", "eth0")
+        sniff_dur = self._form.get_config_dict().get("sniff_duration", 10)
+        self._log_queue.put(("SYSTEM", f"开始在 {iface} 嗅探 OSPF 报文 ({sniff_dur}s)..."))
+        self.root.config(cursor="watch")
+        self.root.update()
+        packets = sniff_ospf(str(iface), int(sniff_dur))
+        self.root.config(cursor="")
+        if packets:
+            self._log_queue.put(("INFO", f"嗅探完成，捕获 {len(packets)} 个 OSPF 报文"))
+            PacketBrowser(self.root, packets,
+                          auto_fill_callback=self._form.auto_fill_from_packet)
+        else:
+            self._log_queue.put(("WARN", "未捕获到 OSPF 报文"))
+            messagebox.showinfo("嗅探结果", "未捕获到 OSPF 报文，请检查接口和网络环境。")
+
+    def _on_import_pcap(self):
+        """导入 pcap 文件并弹出报文浏览器。"""
+        path = filedialog.askopenfilename(
+            filetypes=[("pcap files", "*.pcap *.pcapng"), ("All files", "*.*")],
+            title="导入 pcap 文件",
+        )
+        if not path:
+            return
+        packets = read_pcap(path)
+        if packets:
+            self._log_queue.put(("INFO", f"导入 {len(packets)} 个 OSPF 报文 from {path}"))
+            PacketBrowser(self.root, packets,
+                          auto_fill_callback=self._form.auto_fill_from_packet)
+        else:
+            self._log_queue.put(("WARN", f"文件中未找到 OSPF 报文: {path}"))
+            messagebox.showinfo("导入结果", "该文件中未找到 OSPF 报文。")
 
     def _on_close(self):
         if self._runner and self._runner.is_running:

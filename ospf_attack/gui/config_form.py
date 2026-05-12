@@ -456,6 +456,44 @@ class ConfigForm(tk.Frame):
             messagebox.showerror("导出失败", str(e))
             return False
 
+    def auto_fill_from_packet(self, pkt: dict):
+        """从解析的 OSPF 报文字段自动填充表单参数。"""
+        def _set(key, value):
+            if key in self._widgets and value is not None and value != "":
+                try:
+                    w = self._widgets[key]
+                    if isinstance(w, tk.StringVar):
+                        w.set(str(value))
+                    elif isinstance(w, tk.BooleanVar):
+                        w.set(bool(value))
+                except Exception:
+                    pass
+
+        # 通用字段
+        _set("router_id", pkt.get("router_id"))
+        _set("area_id", pkt.get("area_id"))
+
+        # Hello 字段
+        if "hello_interval" in pkt:
+            _set("hello_interval", pkt["hello_interval"])
+            _set("subnet_mask", pkt.get("mask"))
+            _set("router_priority", pkt.get("priority"))
+            _set("router_dead_interval", pkt.get("dead_interval"))
+
+        # LSA 字段
+        if "lsa_type" in pkt:
+            _set("lsa_type", str(pkt["lsa_type"]))
+            _set("link_state_id", pkt.get("link_state_id"))
+            _set("advertising_router", pkt.get("advertising_router"))
+            _set("sequence_number", f"0x{pkt.get('sequence', 0x80000001):08X}")
+            _set("age", pkt.get("age"))
+            _set("metric", pkt.get("metric"))
+            _set("network_mask", pkt.get("network_mask"))
+            _set("forwarding_address", pkt.get("forwarding_address"))
+
+        # 刷新 Link State ID
+        self._auto_fill_link_state_id()
+
     def set_attack(self, attack_name: str):
         """切换攻击类型，重建专属参数区。"""
         self._attack_name = attack_name
