@@ -48,7 +48,6 @@ class AttackConfig:
     max_packets: int = 0
 
     verbose: bool = False
-    pcap_output: str = ""
 
 
 @dataclass

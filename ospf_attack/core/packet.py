@@ -1,4 +1,5 @@
-from scapy.all import IP, raw
+import struct
+from scapy.all import IP, raw, Raw
 from scapy.contrib.ospf import OSPF_Hdr, OSPF_Hello, OSPF_LSUpd, OSPF_LSA_Hdr
 
 OSPF_TYPE_HELLO = 1
@@ -91,6 +92,91 @@ def build_lsa_header(
         age=age,
         options=options,
     )
+
+
+def build_router_lsa_body(
+    advertising_router: str,
+    flags: int = 0x02,  # 0x02 = ASBR
+) -> bytes:
+    """Build a Type-1 Router-LSA body with a single stub link."""
+    link_id = advertising_router
+    link_data = "255.255.255.255"
+    link_type = 3  # Stub
+    num_tos = 0
+    metric = 1
+
+    body = struct.pack("!BBH",
+        flags & 0x07, 0, 1)  # flags, reserved, link count = 1
+    # Link entry (12 bytes)
+    body += bytes(int(x) for x in link_id.split("."))
+    body += bytes(int(x) for x in link_data.split("."))
+    body += struct.pack("!BBH", link_type, num_tos, metric)
+    return body
+
+
+def build_external_lsa_body(
+    network_mask: str = "255.255.255.0",
+    metric: int = 20,
+    forwarding_address: str = "0.0.0.0",
+    external_route_tag: int = 0,
+) -> bytes:
+    """Build a Type-5 External LSA body."""
+    body = bytes(int(x) for x in network_mask.split("."))
+    # bit E=1 (Type-5), metric in upper 24 bits
+    body += struct.pack("!I", 0x80000000 | (metric & 0x00FFFFFF))
+    body += bytes(int(x) for x in forwarding_address.split("."))
+    body += struct.pack("!I", external_route_tag)
+    return body
+
+
+def build_full_lsa(
+    lsa_type: int,
+    link_state_id: str,
+    advertising_router: str,
+    sequence: int = 0x80000001,
+    age: int = 0,
+    options: int = 0x22,
+    body_data: bytes = b"",
+):
+    """Build an LSA header with a Raw body payload."""
+    hdr = OSPF_LSA_Hdr(
+        type=lsa_type,
+        id=link_state_id,
+        adrouter=advertising_router,
+        seq=sequence,
+        age=age,
+        options=options,
+    )
+    if body_data:
+        return hdr / Raw(body_data)
+    return hdr
+
+
+def build_lsa_with_body(
+    lsa_type: int,
+    link_state_id: str,
+    advertising_router: str,
+    sequence: int = 0x80000001,
+    age: int = 0,
+    metric: int = 1,
+    network_mask: str = "255.255.255.0",
+) -> bytes:
+    """Build a complete OSPF LSA (header + body) based on LSA type.
+
+    Returns bytes ready to be appended to an LSU packet via /Raw().
+    """
+    if lsa_type == 1:  # Router-LSA
+        body = build_router_lsa_body(advertising_router)
+    elif lsa_type == 3:  # Summary-LSA (Type-3)
+        # Summary body: network mask (4) + metric (4)
+        body = (bytes(int(x) for x in network_mask.split("."))
+                + struct.pack("!I", metric & 0x00FFFFFF))
+    elif lsa_type == 5:  # External-LSA (Type-5)
+        body = build_external_lsa_body(network_mask, metric)
+    else:
+        body = b""
+    return build_full_lsa(lsa_type, link_state_id, advertising_router,
+                          sequence, age, body_data=body)
 
 
 def parse_ospf_packet(data: bytes):

@@ -231,7 +231,6 @@ FIELD_META: dict[str, dict] = {
     "packet_rate":    {"widget": "spinbox", "label": "发包速率(pps)", "from_": 1, "to": 10000, "default": 10},
     "max_packets":    {"widget": "spinbox", "label": "最大发包数(0=不限)", "from_": 0, "to": 1000000, "default": 0},
     "verbose":        {"widget": "check",   "label": "详细输出"},
-    "pcap_output":    {"widget": "entry",   "label": "PCAP 保存路径"},
 
     # -- HelloInjectionConfig 专属 --
     "hello_interval":       {"widget": "spinbox", "label": "Hello 间隔(秒)", "from_": 1, "to": 65535, "default": 10},
@@ -275,7 +274,7 @@ FIELD_META: dict[str, dict] = {
 COMMON_FIELDS = [
     "iface", "target", "mode", "sniff_mode", "router_id", "area_id",
     "sniff_duration", "arp_target_a", "arp_target_b", "arp_interval",
-    "packet_rate", "max_packets", "verbose", "pcap_output",
+    "packet_rate", "max_packets", "verbose",
 ]
 
 # 各攻击类型专属字段名列表
@@ -574,7 +573,6 @@ class ConfigForm(tk.Frame):
         _build_field_row(self._common_frame, "sniff_duration", 6, self)
         _build_field_row(self._common_frame, "packet_rate", 7, self)
         _build_field_row(self._common_frame, "max_packets", 8, self)
-        _build_field_row(self._common_frame, "pcap_output", 9, self)
 
         # verbose checkbox
         f_verbose = ttk.Frame(self._common_frame)

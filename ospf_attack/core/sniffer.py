@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple
 try:
     import pcap
     HAS_PCAP = True
-except ImportError:
+except (ImportError, OSError):
     HAS_PCAP = False
 
 
