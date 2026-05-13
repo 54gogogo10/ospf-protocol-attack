@@ -23,4 +23,4 @@ class TestPacketSender:
 
     def test_max_packets_unlimited(self):
         sender = PacketSender(iface="eth0", max_packets=0)
-        assert sender._can_send() is True
+        assert sender._rate_limit() is True

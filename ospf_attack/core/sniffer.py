@@ -1,12 +1,15 @@
 import threading
+import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 try:
     import pcap
     HAS_PCAP = True
 except (ImportError, OSError):
     HAS_PCAP = False
+
+_MAX_PACKETS = 10000
 
 
 @dataclass
@@ -67,11 +70,15 @@ class Sniffer:
         def _capture():
             sniffer = pcap.pcap(name=self.iface, promisc=True, immediate=True)
             sniffer.setfilter("proto 89")
-            deadline = __import__("time").monotonic() + timeout
-            for _ts, pkt in sniffer:
-                if __import__("time").monotonic() > deadline or self._stop_event.is_set():
-                    break
-                self._packets.append(pkt)
+            deadline = time.monotonic() + timeout
+            try:
+                for _ts, pkt in sniffer:
+                    if time.monotonic() > deadline or self._stop_event.is_set():
+                        break
+                    if len(self._packets) < _MAX_PACKETS:
+                        self._packets.append(pkt)
+            except Exception:
+                pass
 
         t = threading.Thread(target=_capture, daemon=True)
         t.start()

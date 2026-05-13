@@ -73,6 +73,8 @@ class LSAConfig(AttackConfig):
     network_mask: str = "255.255.255.0"
     forwarding_address: str = "0.0.0.0"
     external_routes: list = field(default_factory=list)
+    auth_type: str = "none"
+    auth_key: str = ""
 
 
 @dataclass
@@ -98,5 +100,5 @@ class ReplayConfig(AttackConfig):
     """重放攻击专用配置"""
     capture_file: str = ""
     replay_loop: bool = False
-    replay_interval: int = 5
-    modify_fields: dict = field(default_factory=dict)
+    replay_interval: int = 0
+    modify_fields: list = field(default_factory=list)

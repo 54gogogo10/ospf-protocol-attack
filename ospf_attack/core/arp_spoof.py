@@ -70,8 +70,9 @@ class ArpSpoofEngine:
             self._stop_event.wait(timeout=self.interval)
 
     def _restore(self) -> None:
-        """Restore ARP caches by sending correct MAC mappings for each target."""
-        if not self._real_mac_a or not self._real_mac_b:
+        """Restore ARP caches by sending correct MAC mappings for each target.
+        Restores whatever MACs are known — partial restoration is better than none."""
+        if not self._real_mac_a and not self._real_mac_b:
             return
         try:
             for _ in range(3):

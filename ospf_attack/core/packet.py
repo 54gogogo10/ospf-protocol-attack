@@ -1,6 +1,9 @@
 import struct
 from scapy.all import IP, raw, Raw
 from scapy.contrib.ospf import OSPF_Hdr, OSPF_Hello, OSPF_LSUpd, OSPF_LSA_Hdr
+from scapy.fields import RawVal
+
+from .auth import AUTH_NONE, AUTH_PLAIN, AUTH_MD5, build_ospf_auth, _pad_key, _MD5_TRAILER_LEN
 
 OSPF_TYPE_HELLO = 1
 OSPF_TYPE_DD = 2
@@ -19,9 +22,45 @@ OSPF_TYPE_NAMES = {
 OSPF_MULTICAST_ALL = "224.0.0.5"
 OSPF_MULTICAST_DR = "224.0.0.6"
 
-AUTH_NONE = 0
-AUTH_PLAIN = 1
-AUTH_MD5 = 2
+# Re-export for backward compatibility
+# (AUTH_NONE, AUTH_PLAIN, AUTH_MD5 now canonical in auth.py)
+
+
+def _apply_auth_ospf_hdr(ospf_hdr: OSPF_Hdr, auth_type: int, auth_key: bytes,
+                          crypto_seq: int = 1) -> OSPF_Hdr:
+    """Configure OSPF_Hdr fields for authentication (mutates in place)."""
+    ospf_hdr.authtype = auth_type
+    if auth_type == AUTH_PLAIN:
+        ospf_hdr.authdata = RawVal(_pad_key(auth_key))
+    elif auth_type == AUTH_MD5:
+        ospf_hdr.keyid = 1
+        ospf_hdr.authdatalen = _MD5_TRAILER_LEN
+        ospf_hdr.seq = crypto_seq
+    return ospf_hdr
+
+
+def _apply_md5_trailer(pkt, auth_key: bytes):
+    """Compute and append MD5 HMAC trailer to a Scapy OSPF packet.
+
+    Returns a new packet (IP/OSPF/body/Raw(trailer)).
+    """
+    from hashlib import md5
+    import hmac
+
+    # Serialize with auth field zeroed
+    raw_pkt = bytes(pkt)
+    ospf_hdr = pkt[1]  # pkt = IP / OSPF_Hdr / ...
+    ip = pkt[0]
+
+    # Zero auth field in serialized form, compute HMAC
+    iphl = (raw_pkt[0] & 0x0F) * 4
+    ospf_start = iphl
+    data = (raw_pkt[:ospf_start + 16]
+            + b"\x00\x00\x00\x00\x00\x00\x00\x00"
+            + raw_pkt[ospf_start + 24:])
+    digest = hmac.HMAC(auth_key, data, md5).digest()
+
+    return pkt / Raw(digest)
 
 
 def build_hello_packet(
@@ -36,16 +75,13 @@ def build_hello_packet(
     backup_dr: str = "0.0.0.0",
     auth_type: int = AUTH_NONE,
     auth_key: bytes = b"",
+    crypto_seq: int = 1,
     options: int = 0x02,
 ):
     ip = IP(src=src_ip, dst=dst_ip, proto=89, ttl=1)
-    ospf_hdr = OSPF_Hdr(
-        version=2,
-        type=OSPF_TYPE_HELLO,
-        src=router_id,
-        area=area_id,
-        authtype=auth_type,
-    )
+    ospf_hdr = _apply_auth_ospf_hdr(
+        OSPF_Hdr(version=2, type=OSPF_TYPE_HELLO, src=router_id, area=area_id),
+        auth_type, auth_key, crypto_seq)
     hello = OSPF_Hello(
         mask="255.255.255.0",
         hellointerval=hello_interval,
@@ -55,7 +91,10 @@ def build_hello_packet(
         backup=backup_dr,
         options=options,
     )
-    return ip / ospf_hdr / hello
+    pkt = ip / ospf_hdr / hello
+    if auth_type == AUTH_MD5:
+        pkt = _apply_md5_trailer(pkt, auth_key)
+    return pkt
 
 
 def build_lsu_packet(
@@ -64,16 +103,19 @@ def build_lsu_packet(
     src_ip: str,
     dst_ip: str,
     lsa_count: int = 1,
+    auth_type: int = AUTH_NONE,
+    auth_key: bytes = b"",
+    crypto_seq: int = 1,
 ):
     ip = IP(src=src_ip, dst=dst_ip, proto=89, ttl=1)
-    ospf_hdr = OSPF_Hdr(
-        version=2,
-        type=OSPF_TYPE_LSU,
-        src=router_id,
-        area=area_id,
-    )
+    ospf_hdr = _apply_auth_ospf_hdr(
+        OSPF_Hdr(version=2, type=OSPF_TYPE_LSU, src=router_id, area=area_id),
+        auth_type, auth_key, crypto_seq)
     lsu = OSPF_LSUpd(lsacount=lsa_count)
-    return ip / ospf_hdr / lsu
+    pkt = ip / ospf_hdr / lsu
+    if auth_type == AUTH_MD5:
+        pkt = _apply_md5_trailer(pkt, auth_key)
+    return pkt
 
 
 def build_lsa_header(
@@ -181,7 +223,7 @@ def build_lsa_with_body(
 
 def parse_ospf_packet(data: bytes):
     try:
-        pkt = IP(raw(data))
+        pkt = IP(data)
         if pkt.haslayer(OSPF_Hdr):
             return pkt
         return None

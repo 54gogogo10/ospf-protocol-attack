@@ -1,5 +1,5 @@
-import time
 import threading
+import time
 from abc import ABC, abstractmethod
 from ospf_attack.config.types import AttackResult, AttackMode, AttackCategory, SniffMode
 
@@ -11,11 +11,11 @@ class BaseAttack(ABC):
     default_mode: AttackMode = AttackMode.PASSIVE
     needs_repeated: bool = False
 
-    def __init__(self, config):
+    def __init__(self, config, stop_event: threading.Event | None = None):
         self.config = config
         self._sniffer = None
         self._sender = None
-        self._should_stop = False
+        self._stop_event = stop_event or threading.Event()
 
     @abstractmethod
     def setup(self) -> None:
@@ -62,10 +62,10 @@ class BaseAttack(ABC):
     def _run_repeated(self) -> AttackResult:
         deadline = time.time() + self.config.sniff_duration
         rounds = 0
-        while time.time() < deadline and not self._should_stop:
+        while time.time() < deadline and not self._stop_event.is_set():
             if self.send_one_round():
                 rounds += 1
-            time.sleep(max(1.0, 0.1))
+            time.sleep(1.0 / max(getattr(self.config, 'packet_rate', 1), 1))
 
         total_sent = self._sender.sent_count if self._sender else 0
         return AttackResult(

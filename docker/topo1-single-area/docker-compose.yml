@@ -1,12 +1,10 @@
-version: "3.8"
 services:
   r1:
     image: frrouting/frr:latest
     container_name: ospf_r1
     cap_add: [NET_ADMIN, SYS_ADMIN]
     networks:
-      ospf_net:
-        ipv4_address: 10.0.0.1
+      - ospf_net
     volumes:
       - ./frr/r1/daemons:/etc/frr/daemons
       - ./frr/r1/frr.conf:/etc/frr/frr.conf
@@ -16,15 +14,30 @@ services:
     container_name: ospf_r2
     cap_add: [NET_ADMIN, SYS_ADMIN]
     networks:
-      ospf_net:
-        ipv4_address: 10.0.0.2
+      - ospf_net
     volumes:
       - ./frr/r2/daemons:/etc/frr/daemons
       - ./frr/r2/frr.conf:/etc/frr/frr.conf
+
+  attacker:
+    build:
+      context: .
+      dockerfile: Dockerfile.attacker
+    image: ospf-attacker:local
+    container_name: ospf_attacker
+    cap_add: [NET_ADMIN, NET_RAW]
+    networks:
+      - ospf_net
+    volumes:
+      - ../../:/app
+    working_dir: /app
+    command: tail -f /dev/null
+    environment:
+      - PYTHONPATH=/app
 
 networks:
   ospf_net:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.0.0.0/24
+        - subnet: 172.30.0.0/24

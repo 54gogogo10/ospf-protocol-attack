@@ -202,7 +202,7 @@ class TestExecuteAttack:
         )
         fake_attack_cls.return_value = fake_attack
 
-        with patch("ospf_attack.gui.runner._ATTACK_REGISTRY",
+        with patch("ospf_attack.gui.runner.ATTACK_REGISTRY",
                    {"hello-inject": (fake_attack_cls, None)}):
             with patch("ospf_attack.gui.runner.build_config") as mock_build:
                 mock_build.return_value = MagicMock()
@@ -226,7 +226,7 @@ class TestExecuteAttack:
         log_q = queue.Queue()
         stop_ev = threading.Event()
 
-        with patch("ospf_attack.gui.runner._ATTACK_REGISTRY",
+        with patch("ospf_attack.gui.runner.ATTACK_REGISTRY",
                    {"bad-attack": (MagicMock(side_effect=KeyError("test error")), None)}):
             _execute_attack("bad-attack", {}, stop_ev, log_q)
 

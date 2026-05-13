@@ -24,7 +24,7 @@ from ospf_attack.attacks.protocol.mitm import MITMAttack
 from ospf_attack.attacks.protocol.replay import ReplayAttack
 from ospf_attack.cli.formatters import format_table, format_json
 
-_ATTACK_REGISTRY = {
+ATTACK_REGISTRY = {
     "hello-inject":    (HelloInjectAttack, HelloInjectionConfig),
     "adjacency-break": (AdjacencyBreakAttack, HelloInjectionConfig),
     "dr-bdr-hijack":   (DRBDRHijackAttack, HelloInjectionConfig),
@@ -69,20 +69,12 @@ def _run_attack(attack_cls, config_cls, **kwargs):
     output_fmt = kwargs.pop("output", "table")
     config_file = kwargs.pop("config_file", "")
 
-    mode = AttackMode.PASSIVE
     if kwargs.get("mode_flag") is True:
         kwargs["mode"] = "passive"
     elif kwargs.get("mode_flag") is False:
         kwargs["mode"] = "active"
 
     config = build_config(attack_cls.name, kwargs, config_file)
-    if config is None:
-        config = config_cls(
-            iface=kwargs.get("iface", "eth0"),
-            target=kwargs.get("target", "224.0.0.5"),
-            mode=mode,
-            sniff_mode=SniffMode(kwargs.get("sniff_mode", "hub")),
-        )
 
     attack = attack_cls(config)
     result = attack.run()
@@ -97,7 +89,7 @@ def _run_attack(attack_cls, config_cls, **kwargs):
 
 
 def register_commands(cli: click.Group):
-    for name, (attack_cls, config_cls) in _ATTACK_REGISTRY.items():
+    for name, (attack_cls, config_cls) in ATTACK_REGISTRY.items():
         def _make_cmd(a_cls, c_cls):
             @_common_options
             @click.pass_context

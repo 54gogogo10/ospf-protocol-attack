@@ -6,6 +6,10 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Any
 
+from scapy.all import IP, Raw, IFACES
+from scapy.contrib.ospf import OSPF_Hdr, OSPF_Hello, OSPF_LSUpd, OSPF_LSA_Hdr
+from scapy.utils import wrpcap
+
 from .styles import FONT_LABEL, FONT_ENTRY, PAD_FORM, PAD_OUTER, SECTION_GAP
 
 # ---------------------------------------------------------------------------
@@ -195,7 +199,6 @@ def get_network_interfaces() -> list[str]:
     """获取本机网卡列表（可读名称）。Windows 用 Scapy/Npcap，Linux 用 socket。"""
     # Windows: Scapy IFACES 提供 Npcap 可读名称
     try:
-        from scapy.all import IFACES
         names = sorted(set(
             d.description for d in IFACES.data.values()
             if d.description
@@ -287,16 +290,20 @@ SPECIFIC_FIELDS: dict[str, list[str]] = {
                         "auth_type", "auth_key", "subnet_mask"],
     "route-inject":    ["lsa_type", "link_state_id", "advertising_router",
                         "sequence_number", "age", "metric", "network_mask",
-                        "forwarding_address", "external_routes"],
+                        "forwarding_address", "external_routes",
+                        "auth_type", "auth_key"],
     "max-seq":         ["lsa_type", "link_state_id", "advertising_router",
                         "sequence_number", "age", "metric", "network_mask",
-                        "forwarding_address", "external_routes"],
+                        "forwarding_address", "external_routes",
+                        "auth_type", "auth_key"],
     "max-age":         ["lsa_type", "link_state_id", "advertising_router",
                         "sequence_number", "age", "metric", "network_mask",
-                        "forwarding_address", "external_routes"],
+                        "forwarding_address", "external_routes",
+                        "auth_type", "auth_key"],
     "fight-back":      ["lsa_type", "link_state_id", "advertising_router",
                         "sequence_number", "age", "metric", "network_mask",
-                        "forwarding_address", "external_routes"],
+                        "forwarding_address", "external_routes",
+                        "auth_type", "auth_key"],
     "flood":           ["duration", "thread_count"],
     "spf-recalc":      ["duration", "thread_count", "lsa_change_interval"],
     "db-overflow":     ["duration", "lsa_count"],
@@ -378,12 +385,9 @@ class ConfigForm(tk.Frame):
 
     def build_packet(self):
         """根据当前参数构造一个 Scapy OSPF 报文（用于导出 pcap）。"""
-        from scapy.all import IP, Raw
-        from scapy.contrib.ospf import OSPF_Hdr, OSPF_Hello, OSPF_LSUpd, OSPF_LSA_Hdr
         from ospf_attack.network.adapter import get_local_ip
         from ospf_attack.core.packet import (
-            build_lsa_with_body, build_router_lsa_body, build_external_lsa_body,
-            OSPF_MULTICAST_ALL, OSPF_MULTICAST_DR,
+            build_lsa_with_body, OSPF_MULTICAST_ALL, OSPF_MULTICAST_DR,
         )
 
         w = self._widgets
@@ -438,8 +442,6 @@ class ConfigForm(tk.Frame):
 
     def export_pcap(self) -> bool:
         """将当前构造的报文导出为 pcap 文件，返回是否成功。"""
-        from scapy.utils import wrpcap
-
         path = filedialog.asksaveasfilename(
             defaultextension=".pcap",
             filetypes=[("pcap files", "*.pcap"), ("All files", "*.*")],

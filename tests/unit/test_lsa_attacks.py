@@ -17,3 +17,25 @@ class TestLSAttacks:
         config = LSAConfig(iface="eth0", target="224.0.0.5", age=3600)
         attack = MaxAgeAttack(config)
         assert attack.config.age == 3600
+
+    def test_auth_defaults_to_none(self):
+        config = LSAConfig(iface="eth0", target="224.0.0.5")
+        assert config.auth_type == "none"
+        assert config.auth_key == ""
+
+    def test_auth_plain_setup(self):
+        config = LSAConfig(iface="eth0", target="224.0.0.5",
+                           auth_type="plain", auth_key="secret")
+        assert config.auth_type == "plain"
+        assert config.auth_key == "secret"
+        attack = RouteInjectAttack(config)
+        attack.setup()
+        assert attack._sender is not None
+
+    def test_auth_md5_setup(self):
+        config = LSAConfig(iface="eth0", target="224.0.0.5",
+                           auth_type="md5", auth_key="mykey")
+        assert config.auth_type == "md5"
+        attack = MaxSeqAttack(config)
+        attack.setup()
+        assert attack._sender is not None

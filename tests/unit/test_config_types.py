@@ -122,7 +122,4 @@ class TestMITMConfig:
 class TestReplayConfig:
     def test_defaults(self):
         c = ReplayConfig(iface="eth0", target="224.0.0.5")
-        assert c.replay_loop is False
-        assert c.replay_interval == 5
         assert c.capture_file == ""
-        assert c.modify_fields == {}

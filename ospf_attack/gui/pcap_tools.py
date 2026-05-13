@@ -83,15 +83,16 @@ def _parse_ospf_lsu(data: bytes) -> dict | None:
         "raw_body": data[lsa_start:lsa_start + body_len] if lsa_start + body_len <= len(data) else b"",
     }
 
-    # Parse LSA body for additional fields
+    # Parse LSA body fields (skip 20-byte LSA header)
     body = result["raw_body"]
-    if lsa_type == 5 and len(body) >= 16:
-        result["network_mask"] = _ip_to_str(body, 0)
-        result["metric"] = int.from_bytes(body[4:8], "big") & 0x00FFFFFF
-        result["forwarding_address"] = _ip_to_str(body, 8)
-    elif lsa_type == 3 and len(body) >= 8:
-        result["network_mask"] = _ip_to_str(body, 0)
-        result["metric"] = int.from_bytes(body[4:8], "big") & 0x00FFFFFF
+    HDR = 20  # LSA header size
+    if lsa_type == 5 and len(body) >= HDR + 12:
+        result["network_mask"] = _ip_to_str(body, HDR)
+        result["metric"] = int.from_bytes(body[HDR + 4:HDR + 8], "big") & 0x00FFFFFF
+        result["forwarding_address"] = _ip_to_str(body, HDR + 8)
+    elif lsa_type == 3 and len(body) >= HDR + 8:
+        result["network_mask"] = _ip_to_str(body, HDR)
+        result["metric"] = int.from_bytes(body[HDR + 4:HDR + 8], "big") & 0x00FFFFFF
 
     return result
 
@@ -169,6 +170,32 @@ def sniff_ospf(iface: str, timeout: int = 10) -> list[dict]:
     except Exception:
         import traceback
         traceback.print_exc()
+    return results
+
+
+def sniff_ospf_async(iface: str, timeout: int = 60):
+    """Start async OSPF sniff, returns (sniffer, stop_event) tuple.
+
+    The caller can poll sniffer.results for live packet count and
+    call sniffer.stop() to end capture early.
+    """
+    from scapy.all import AsyncSniffer
+    sniffer = AsyncSniffer(
+        filter="proto 89", iface=iface,
+        timeout=timeout, store=True,
+    )
+    sniffer.start()
+    return sniffer
+
+
+def parse_sniff_results(sniffer) -> list[dict]:
+    """Parse captured packets from an AsyncSniffer into dict list."""
+    results = []
+    for pkt in sniffer.results:
+        parsed = parse_ospf_packet(bytes(pkt))
+        if parsed:
+            parsed["_raw"] = bytes(pkt)
+            results.append(parsed)
     return results
 
 
@@ -338,8 +365,16 @@ class PacketBrowser(tk.Toplevel):
             return
         try:
             from scapy.utils import wrpcap
-            raw_pkts = [pkt["_raw"] for pkt in self._packets if "_raw" in pkt]
-            if raw_pkts:
-                wrpcap(path, raw_pkts)
+            from scapy.all import Ether
+            pkts = []
+            for pkt in self._packets:
+                raw = pkt.get("_raw")
+                if raw:
+                    try:
+                        pkts.append(Ether(raw))
+                    except Exception:
+                        pkts.append(raw)
+            if pkts:
+                wrpcap(path, pkts)
         except Exception as e:
             messagebox.showerror("保存失败", str(e))

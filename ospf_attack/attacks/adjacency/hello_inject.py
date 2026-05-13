@@ -1,5 +1,3 @@
-import threading
-import time
 from ospf_attack.attacks.base import BaseAttack, AttackResult, AttackCategory
 from ospf_attack.config.types import HelloInjectionConfig
 from ospf_attack.core.packet import build_hello_packet, OSPF_MULTICAST_ALL
